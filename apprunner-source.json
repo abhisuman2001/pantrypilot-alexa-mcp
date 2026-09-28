@@ -1,0 +1,18 @@
+{
+  "ImageRepository": {
+    "ImageIdentifier": "448049796441.dkr.ecr.us-east-1.amazonaws.com/pantrypilot:latest",
+    "ImageRepositoryType": "ECR",
+    "ImageConfiguration": {
+      "Port": "8000",
+      "RuntimeEnvironmentVariables": {
+        "PORT": "8000",
+        "AWS_REGION": "us-east-1",
+        "PANTRY_DB": "/tmp/pantry.db"
+      }
+    }
+  },
+  "AutoDeploymentsEnabled": false,
+  "AuthenticationConfiguration": {
+    "AccessRoleArn": "arn:aws:iam::448049796441:role/AppRunnerECRAccessRole"
+  }
+}

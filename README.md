@@ -108,12 +108,15 @@ npx -y @modelcontextprotocol/inspector
 ## Deploy (Docker → AWS App Runner)
 
 ```bash
-docker build -t pantrypilot .
-docker run -p 8000:8000 --env-file .env pantrypilot
-
-# Push to ECR, then deploy to App Runner pointing at /mcp
-# TODO: record public HTTPS URL here after deployment
+# One-command deploy (builds, pushes to ECR, creates App Runner service):
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\deploy.ps1
 ```
+
+**Live deployment:**
+- Service URL: `https://kykh233phz.us-east-1.awsapprunner.com`
+- MCP endpoint: `https://kykh233phz.us-east-1.awsapprunner.com/mcp`
+- ECR image: `448049796441.dkr.ecr.us-east-1.amazonaws.com/pantrypilot:latest`
 
 ---
 
@@ -132,7 +135,7 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 - [x] `pytest` passes (64 tests)
 - [x] Bedrock called in `suggest_recipe` and `weekly_meal_plan` (with offline fallback)
 - [x] Bearer-token auth (`MCP_API_KEY`), input validation, no stack traces exposed
-- [ ] Deployed over HTTPS, `/mcp` reachable
+- [x] Deployed over HTTPS — `https://kykh233phz.us-east-1.awsapprunner.com/mcp`
 - [ ] Demo video recorded (≤ 3 min, voice demo first)
 - [ ] Devpost description written
 - [ ] Friction log completed (up to +10% bonus)

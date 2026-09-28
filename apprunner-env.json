@@ -1,0 +1,10 @@
+{
+  "RuntimeEnvironmentVariables": {
+    "PORT": "8000",
+    "AWS_REGION": "us-east-1",
+    "PANTRY_DB": "/tmp/pantry.db",
+    "BEDROCK_MODEL_ID": "amazon.nova-micro-v1:0",
+    "DEFAULT_OWNER": "default",
+    "MCP_API_KEY": ""
+  }
+}
