@@ -136,6 +136,7 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 - [x] Bedrock called in `suggest_recipe` and `weekly_meal_plan` (with offline fallback)
 - [x] Bearer-token auth (`MCP_API_KEY`), input validation, no stack traces exposed
 - [x] Deployed over HTTPS — `https://kykh233phz.us-east-1.awsapprunner.com/mcp`
-- [ ] Demo video recorded (≤ 3 min, voice demo first)
-- [ ] Devpost description written
-- [ ] Friction log completed (up to +10% bonus)
+- [ ] Demo video recorded (≤ 3 min, voice demo first) — **record and link here**
+- [x] Devpost description written — see [SUBMISSION.md](SUBMISSION.md)
+- [x] Friction log completed (+10% bonus) — see [FRICTION_LOG.md](FRICTION_LOG.md) (7 items, severity + workaround + suggestion each)
+
