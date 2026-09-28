@@ -360,3 +360,101 @@ class TestShoppingList:
         for ch in ("#", "*", "_", "|", "`"):
             assert ch not in result, f"Markdown char '{ch}' in get_shopping_list output"
 
+
+# ---------------------------------------------------------------------------
+# Step 5: weekly_meal_plan, waste_report, bedrock_converse with timeout
+# ---------------------------------------------------------------------------
+
+class TestWeeklyMealPlan:
+    def test_empty_pantry_guard(self):
+        assert "empty" in s().weekly_meal_plan().lower()
+
+    def test_bedrock_success_returns_text(self):
+        s().add_item("chicken", quantity=2, days_until_expiry=1)
+        s().add_item("rice", quantity=1, unit="cup", days_until_expiry=5)
+        mock_resp = {
+            "output": {"message": {"content": [
+                {"text": "Monday: chicken fried rice. Tuesday: chicken soup with rice. Wednesday: rice bowl."}
+            ]}}
+        }
+        mock_client = MagicMock()
+        mock_client.converse.return_value = mock_resp
+        with patch("boto3.client", return_value=mock_client):
+            result = s().weekly_meal_plan()
+        assert "chicken" in result.lower() or "rice" in result.lower()
+
+    def test_bedrock_failure_returns_fallback(self):
+        s().add_item("pasta", quantity=500, unit="grams", days_until_expiry=2)
+        with patch("boto3.client", side_effect=Exception("timeout")):
+            result = s().weekly_meal_plan()
+        assert "pasta" in result or "meals with" in result.lower()
+
+    def test_output_no_markdown(self):
+        s().add_item("beans", quantity=1, days_until_expiry=2)
+        mock_resp = {
+            "output": {"message": {"content": [
+                {"text": "Day 1 beans stew. Day 2 beans soup."}
+            ]}}
+        }
+        mock_client = MagicMock()
+        mock_client.converse.return_value = mock_resp
+        with patch("boto3.client", return_value=mock_client):
+            result = s().weekly_meal_plan()
+        for ch in ("#", "*", "`", "|"):
+            assert ch not in result
+
+    def test_owner_scoped(self):
+        ctx_a = make_ctx("alice")
+        ctx_b = make_ctx("bob")
+        srv = s()
+        srv.add_item("tofu", quantity=1, ctx=ctx_a)
+        # Bob has empty pantry — should get empty message
+        result = srv.weekly_meal_plan(ctx=ctx_b)
+        assert "empty" in result.lower()
+
+
+class TestWasteReport:
+    def test_empty_report(self):
+        result = s().waste_report(days=7)
+        assert "no items" in result.lower() or "0" in result or "no" in result.lower()
+
+    def test_use_item_populates_waste_log(self):
+        srv = s()
+        srv.add_item("milk", quantity=3, unit="litres")
+        srv.use_item("milk", quantity=1)     # partial use
+        srv.use_item("milk", quantity=2)     # empties it
+        result = srv.waste_report(days=1)
+        assert "milk" in result
+        assert "3" in result   # total 3 litres consumed
+
+    def test_report_respects_days_window(self):
+        """Items logged before the window should not appear."""
+        import sqlite3 as _sql
+        db_path = os.getenv("PANTRY_DB")
+        # Insert a log entry 10 days ago
+        con = _sql.connect(db_path)
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS waste_log"
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL DEFAULT 'default',"
+            " name TEXT NOT NULL, qty REAL NOT NULL, unit TEXT NOT NULL DEFAULT 'pcs',"
+            " logged_at TEXT NOT NULL)"
+        )
+        old_date = (date.today() - timedelta(days=10)).isoformat()
+        con.execute(
+            "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES('default','ancient_cheese',1,'pcs',?)",
+            (old_date,),
+        )
+        con.commit(); con.close()
+        result = s().waste_report(days=7)
+        assert "ancient_cheese" not in result
+
+    def test_owner_isolated(self):
+        ctx_a = make_ctx("alice")
+        ctx_b = make_ctx("bob")
+        srv = s()
+        srv.add_item("butter", quantity=1, ctx=ctx_a)
+        srv.use_item("butter", quantity=1, ctx=ctx_a)
+        result_b = srv.waste_report(days=7, ctx=ctx_b)
+        assert "butter" not in result_b
+
+

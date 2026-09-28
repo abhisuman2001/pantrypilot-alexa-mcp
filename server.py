@@ -3,14 +3,19 @@ Tools are voice-first: short, speakable answers. Recipes come from Amazon Bedroc
 
 Step 3: Multi-user support scoped by 'owner' (X-User-ID header or DEFAULT_OWNER).
   - TODO(verify): confirm the exact header/claim Alexa+ uses for user identity.
-Step 4: Shopping list. add_to_shopping_list / get_shopping_list tools added.
-  - use_item auto-adds an item to the shopping list when it runs out.
-  - add_item removes the item from the shopping list when restocked.
+Step 4: Shopping list (add_to_shopping_list / get_shopping_list); use_item auto-adds.
+Step 5: Smarter Bedrock. bedrock_converse() helper with timeout + 1 retry.
+  - weekly_meal_plan: 7-day dinner plan from pantry contents.
+  - waste_report: items consumed in the last N days.
+  - use_item logs every consumption to waste_log for reporting.
 """
 import os
 import logging
 import sqlite3
 from datetime import date, timedelta
+
+import boto3
+from botocore.config import Config as BotoCfg
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Context
@@ -33,7 +38,7 @@ mcp = FastMCP(
 )
 
 DB = os.getenv("PANTRY_DB", "pantry.db")
-MODEL = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
+MODEL = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-micro-v1:0")
 DEFAULT_OWNER = os.getenv("DEFAULT_OWNER", "default")
 
 
@@ -64,6 +69,16 @@ def db() -> sqlite3.Connection:
             PRIMARY KEY (owner, name)
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS waste_log(
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner     TEXT NOT NULL DEFAULT 'default',
+            name      TEXT NOT NULL,
+            qty       REAL NOT NULL,
+            unit      TEXT NOT NULL DEFAULT 'pcs',
+            logged_at TEXT NOT NULL
+        )
+    """)
     # Migration: tables created before Step 3 lacked the owner column.
     # Safe to run every time; the ALTER is a no-op if the column exists.
     try:
@@ -90,6 +105,29 @@ def get_owner(ctx: Context | None) -> str:
         except Exception:
             pass  # running outside HTTP context (e.g., tests, stdio)
     return DEFAULT_OWNER
+
+
+def bedrock_converse(prompt: str, max_tokens: int = 350) -> str:
+    """Call Bedrock Converse with a timeout; raise on any error.
+
+    connect_timeout=5s, read_timeout=15s, max_attempts=1 (no SDK retries –
+    we handle fallback in each caller).
+    """
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=os.getenv("AWS_REGION", "us-east-1"),
+        config=BotoCfg(
+            connect_timeout=5,
+            read_timeout=15,
+            retries={"max_attempts": 1},
+        ),
+    )
+    resp = client.converse(
+        modelId=MODEL,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"maxTokens": max_tokens},
+    )
+    return resp["output"]["message"]["content"][0]["text"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -147,18 +185,22 @@ def use_item(
         left = row["qty"] - quantity
         if left <= 0:
             unit = row["unit"]
-            con.execute(
-                "DELETE FROM items WHERE owner=? AND name=?", (owner, name)
-            )
-            # Auto-add to shopping list so the user remembers to restock.
+            used_qty = row["qty"]   # entire remaining stock consumed
+            con.execute("DELETE FROM items WHERE owner=? AND name=?", (owner, name))
             con.execute(
                 """INSERT INTO shopping_list(owner, name, qty, unit) VALUES(?,?,?,?)
                    ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
                 (owner, name, 1, unit),
             )
+            con.execute(
+                "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
+                (owner, name, used_qty, unit, date.today().isoformat()),
+            )
             return f"That was the last of your {name}. I've added it to your shopping list."
+        con.execute("UPDATE items SET qty=? WHERE owner=? AND name=?", (left, owner, name))
         con.execute(
-            "UPDATE items SET qty=? WHERE owner=? AND name=?", (left, owner, name)
+            "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
+            (owner, name, quantity, row["unit"], date.today().isoformat()),
         )
     return f"{left:g} {row['unit']} of {name} left."
 
@@ -252,19 +294,51 @@ def suggest_recipe(mood: str = "", ctx: Context | None = None) -> str:  # noqa: 
         "Reply in under 80 words, plain speech, no markdown."
     )
     try:
-        import boto3
-        resp = boto3.client(
-            "bedrock-runtime",
-            region_name=os.getenv("AWS_REGION", "us-east-1"),
-        ).converse(
-            modelId=MODEL,
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": 300},
-        )
-        return resp["output"]["message"]["content"][0]["text"].strip()
+        return bedrock_converse(prompt, max_tokens=300)
     except Exception as exc:
         log.warning("Bedrock call failed (%s); using offline fallback.", exc)
         return "Try a quick stir-fry with " + ", ".join(row["name"] for row in rows[:3]) + "."
+
+
+@mcp.tool()
+def weekly_meal_plan(ctx: Context | None = None) -> str:
+    """Plan 7 dinners for the week using pantry contents, starting with items expiring soonest."""
+    owner = get_owner(ctx)
+    rows = db().execute(
+        "SELECT name, qty, unit, expires FROM items WHERE owner=? ORDER BY expires IS NULL, expires",
+        (owner,),
+    ).fetchall()
+    if not rows:
+        return "Your pantry is empty. Add some groceries and I'll plan your week."
+    stock = "; ".join(f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})" for r in rows)
+    prompt = (
+        f"Pantry: {stock}. Plan 7 quick dinners (one per day) that use "
+        "soonest-expiring items first. Each dinner in one sentence. "
+        "Plain speech, no markdown, no numbering."
+    )
+    try:
+        return bedrock_converse(prompt, max_tokens=400)
+    except Exception as exc:
+        log.warning("Bedrock weekly_meal_plan failed (%s); fallback.", exc)
+        names = ", ".join(r["name"] for r in rows[:7])
+        return f"This week try meals with: {names}. Use soonest-expiring items first."
+
+
+@mcp.tool()
+def waste_report(days: int = 7, ctx: Context | None = None) -> str:
+    """Show a summary of items you consumed in the last N days (default 7)."""
+    owner = get_owner(ctx)
+    since = (date.today() - timedelta(days=days)).isoformat()
+    rows = db().execute(
+        """SELECT name, SUM(qty) AS total, unit FROM waste_log
+           WHERE owner=? AND logged_at>=?
+           GROUP BY name, unit ORDER BY total DESC""",
+        (owner, since),
+    ).fetchall()
+    if not rows:
+        return f"No items recorded as used in the last {days} days."
+    parts = ", ".join(f"{r['total']:g} {r['unit']} {r['name']}" for r in rows)
+    return f"In the last {days} days you used: {parts}."
 
 
 # ---------------------------------------------------------------------------
