@@ -1,0 +1,7 @@
+mcp>=1.12,<2
+boto3>=1.35
+# test / dev dependencies
+pytest>=8.0
+pytest-anyio>=0.0.0
+httpx>=0.27
+anyio>=4.0

@@ -1,0 +1,33 @@
+# Secrets and credentials – NEVER commit these
+.env
+*.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Database files – contain user data
+*.db
+*.sqlite3
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
