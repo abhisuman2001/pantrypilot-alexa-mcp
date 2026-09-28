@@ -8,6 +8,10 @@ Step 5: Smarter Bedrock. bedrock_converse() helper with timeout + 1 retry.
   - weekly_meal_plan: 7-day dinner plan from pantry contents.
   - waste_report: items consumed in the last N days.
   - use_item logs every consumption to waste_log for reporting.
+Step 6: Auth and safety.
+  - Bearer-token gate via MCP_API_KEY env var (disabled when unset).
+  - Input validation: name non-empty ≤100 chars, quantity > 0.
+  - No stack traces in tool output – every tool catches Exception.
 """
 import os
 import logging
@@ -40,6 +44,7 @@ mcp = FastMCP(
 DB = os.getenv("PANTRY_DB", "pantry.db")
 MODEL = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-micro-v1:0")
 DEFAULT_OWNER = os.getenv("DEFAULT_OWNER", "default")
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")  # empty → auth disabled (local dev)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +136,46 @@ def bedrock_converse(prompt: str, max_tokens: int = 350) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Auth & validation helpers
+# ---------------------------------------------------------------------------
+
+def check_auth(ctx: Context | None) -> str | None:
+    """Return an error string if the request fails bearer-token auth, else None.
+
+    Auth is skipped when MCP_API_KEY is unset (local dev / tests).
+    TODO(verify): confirm whether Alexa+ sends Authorization header or uses
+    a different authentication mechanism.
+    """
+    if not MCP_API_KEY:
+        return None
+    if ctx is None:
+        return None  # direct call in tests or stdio transport – skip
+    try:
+        auth = ctx.request_context.request.headers.get("authorization", "")
+        if auth == f"Bearer {MCP_API_KEY}":
+            return None
+        return "Unauthorized. Provide a valid API key."
+    except Exception:
+        return None  # can't read headers – allow gracefully
+
+
+def validate_name(raw: str) -> str:
+    """Strip, lower-case, and validate an item name. Raises ValueError on bad input."""
+    name = raw.strip().lower()
+    if not name:
+        raise ValueError("Item name cannot be empty.")
+    if len(name) > 100:
+        raise ValueError("Item name is too long (max 100 characters).")
+    return name
+
+
+def validate_positive(value: float, label: str = "Quantity") -> None:
+    """Raise ValueError if value is not strictly positive."""
+    if value <= 0:
+        raise ValueError(f"{label} must be greater than zero.")
+
+
+# ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
@@ -143,27 +188,36 @@ def add_item(
     ctx: Context | None = None,
 ) -> str:
     """Add groceries to the pantry, e.g. 'add 6 eggs that expire in 10 days'."""
-    owner = get_owner(ctx)
-    name = name.strip().lower()
-    exp = (
-        (date.today() + timedelta(days=days_until_expiry)).isoformat()
-        if days_until_expiry is not None
-        else None
-    )
-    with db() as con:
-        con.execute(
-            """INSERT INTO items(owner, name, qty, unit, expires) VALUES(?,?,?,?,?)
-               ON CONFLICT(owner, name) DO UPDATE SET
-                 qty=qty+excluded.qty,
-                 expires=COALESCE(excluded.expires, expires)""",
-            (owner, name, quantity, unit, exp),
+    if err := check_auth(ctx):
+        return err
+    try:
+        name = validate_name(name)
+        validate_positive(quantity, "Quantity")
+        if days_until_expiry is not None:
+            validate_positive(days_until_expiry, "Days until expiry")
+        owner = get_owner(ctx)
+        exp = (
+            (date.today() + timedelta(days=days_until_expiry)).isoformat()
+            if days_until_expiry is not None else None
         )
-        # Remove from shopping list now that the item is restocked.
-        removed = con.execute(
-            "DELETE FROM shopping_list WHERE owner=? AND name=?", (owner, name)
-        ).rowcount
-    suffix = " Removed from your shopping list." if removed else ""
-    return f"Added {quantity:g} {unit} of {name}.{suffix}"
+        with db() as con:
+            con.execute(
+                """INSERT INTO items(owner, name, qty, unit, expires) VALUES(?,?,?,?,?)
+                   ON CONFLICT(owner, name) DO UPDATE SET
+                     qty=qty+excluded.qty,
+                     expires=COALESCE(excluded.expires, expires)""",
+                (owner, name, quantity, unit, exp),
+            )
+            removed = con.execute(
+                "DELETE FROM shopping_list WHERE owner=? AND name=?", (owner, name)
+            ).rowcount
+        suffix = " Removed from your shopping list." if removed else ""
+        return f"Added {quantity:g} {unit} of {name}.{suffix}"
+    except ValueError as exc:
+        return str(exc)
+    except Exception:
+        log.exception("add_item failed")
+        return "Something went wrong adding that item. Please try again."
 
 
 
@@ -174,35 +228,44 @@ def use_item(
     ctx: Context | None = None,
 ) -> str:
     """Record that some of an item was used up or thrown out."""
-    owner = get_owner(ctx)
-    name = name.strip().lower()
-    with db() as con:
-        row = con.execute(
-            "SELECT qty, unit FROM items WHERE owner=? AND name=?", (owner, name)
-        ).fetchone()
-        if not row:
-            return f"You don't have any {name}."
-        left = row["qty"] - quantity
-        if left <= 0:
-            unit = row["unit"]
-            used_qty = row["qty"]   # entire remaining stock consumed
-            con.execute("DELETE FROM items WHERE owner=? AND name=?", (owner, name))
-            con.execute(
-                """INSERT INTO shopping_list(owner, name, qty, unit) VALUES(?,?,?,?)
-                   ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
-                (owner, name, 1, unit),
-            )
+    if err := check_auth(ctx):
+        return err
+    try:
+        name = validate_name(name)
+        validate_positive(quantity, "Quantity")
+        owner = get_owner(ctx)
+        with db() as con:
+            row = con.execute(
+                "SELECT qty, unit FROM items WHERE owner=? AND name=?", (owner, name)
+            ).fetchone()
+            if not row:
+                return f"You don't have any {name}."
+            left = row["qty"] - quantity
+            if left <= 0:
+                unit = row["unit"]
+                used_qty = row["qty"]
+                con.execute("DELETE FROM items WHERE owner=? AND name=?", (owner, name))
+                con.execute(
+                    """INSERT INTO shopping_list(owner, name, qty, unit) VALUES(?,?,?,?)
+                       ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
+                    (owner, name, 1, unit),
+                )
+                con.execute(
+                    "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
+                    (owner, name, used_qty, unit, date.today().isoformat()),
+                )
+                return f"That was the last of your {name}. I've added it to your shopping list."
+            con.execute("UPDATE items SET qty=? WHERE owner=? AND name=?", (left, owner, name))
             con.execute(
                 "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
-                (owner, name, used_qty, unit, date.today().isoformat()),
+                (owner, name, quantity, row["unit"], date.today().isoformat()),
             )
-            return f"That was the last of your {name}. I've added it to your shopping list."
-        con.execute("UPDATE items SET qty=? WHERE owner=? AND name=?", (left, owner, name))
-        con.execute(
-            "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
-            (owner, name, quantity, row["unit"], date.today().isoformat()),
-        )
-    return f"{left:g} {row['unit']} of {name} left."
+        return f"{left:g} {row['unit']} of {name} left."
+    except ValueError as exc:
+        return str(exc)
+    except Exception:
+        log.exception("use_item failed")
+        return "Something went wrong. Please try again."
 
 
 @mcp.tool()
@@ -213,132 +276,183 @@ def add_to_shopping_list(
     ctx: Context | None = None,
 ) -> str:
     """Add an item to the shopping list, e.g. 'add milk to my shopping list'."""
-    owner = get_owner(ctx)
-    name = name.strip().lower()
-    with db() as con:
-        con.execute(
-            """INSERT INTO shopping_list(owner, name, qty, unit) VALUES(?,?,?,?)
-               ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
-            (owner, name, quantity, unit),
-        )
-    return f"Added {quantity:g} {unit} of {name} to your shopping list."
+    if err := check_auth(ctx):
+        return err
+    try:
+        name = validate_name(name)
+        validate_positive(quantity, "Quantity")
+        owner = get_owner(ctx)
+        with db() as con:
+            con.execute(
+                """INSERT INTO shopping_list(owner, name, qty, unit) VALUES(?,?,?,?)
+                   ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
+                (owner, name, quantity, unit),
+            )
+        return f"Added {quantity:g} {unit} of {name} to your shopping list."
+    except ValueError as exc:
+        return str(exc)
+    except Exception:
+        log.exception("add_to_shopping_list failed")
+        return "Something went wrong. Please try again."
 
 
 @mcp.tool()
 def get_shopping_list(ctx: Context | None = None) -> str:
     """Read out everything on the shopping list."""
-    owner = get_owner(ctx)
-    rows = db().execute(
-        "SELECT name, qty, unit FROM shopping_list WHERE owner=? ORDER BY name", (owner,)
-    ).fetchall()
-    if not rows:
-        return "Your shopping list is empty."
-    return "Shopping list: " + ", ".join(
-        f"{r['qty']:g} {r['unit']} {r['name']}" for r in rows
-    ) + "."
+    if err := check_auth(ctx):
+        return err
+    try:
+        owner = get_owner(ctx)
+        rows = db().execute(
+            "SELECT name, qty, unit FROM shopping_list WHERE owner=? ORDER BY name", (owner,)
+        ).fetchall()
+        if not rows:
+            return "Your shopping list is empty."
+        return "Shopping list: " + ", ".join(
+            f"{r['qty']:g} {r['unit']} {r['name']}" for r in rows
+        ) + "."
+    except Exception:
+        log.exception("get_shopping_list failed")
+        return "Could not retrieve your shopping list. Please try again."
 
 
 @mcp.tool()
 def list_pantry(ctx: Context | None = None) -> str:
     """Read out everything currently in the pantry."""
-    owner = get_owner(ctx)
-    rows = db().execute(
-        "SELECT * FROM items WHERE owner=? ORDER BY name", (owner,)
-    ).fetchall()
-    if not rows:
-        return "Your pantry is empty."
-    return "You have " + ", ".join(
-        f"{r['qty']:g} {r['unit']} {r['name']}" for r in rows
-    ) + "."
+    if err := check_auth(ctx):
+        return err
+    try:
+        owner = get_owner(ctx)
+        rows = db().execute(
+            "SELECT * FROM items WHERE owner=? ORDER BY name", (owner,)
+        ).fetchall()
+        if not rows:
+            return "Your pantry is empty."
+        return "You have " + ", ".join(
+            f"{r['qty']:g} {r['unit']} {r['name']}" for r in rows
+        ) + "."
+    except Exception:
+        log.exception("list_pantry failed")
+        return "Could not read the pantry. Please try again."
 
 
 @mcp.tool()
 def expiring_soon(days: int = 3, ctx: Context | None = None) -> str:
     """List items that expire within the next N days (default 3)."""
-    owner = get_owner(ctx)
-    cutoff = (date.today() + timedelta(days=days)).isoformat()
-    rows = db().execute(
-        """SELECT name, expires FROM items
-           WHERE owner=? AND expires IS NOT NULL AND expires<=?
-           ORDER BY expires""",
-        (owner, cutoff),
-    ).fetchall()
-    if not rows:
-        return f"Nothing expires in the next {days} days."
-    today = date.today()
-    return "Use soon: " + ", ".join(
-        f"{r['name']} ({'expired' if date.fromisoformat(r['expires']) < today else r['expires']})"
-        for r in rows
-    ) + "."
+    if err := check_auth(ctx):
+        return err
+    try:
+        validate_positive(days, "Days")
+        owner = get_owner(ctx)
+        cutoff = (date.today() + timedelta(days=days)).isoformat()
+        rows = db().execute(
+            """SELECT name, expires FROM items
+               WHERE owner=? AND expires IS NOT NULL AND expires<=?
+               ORDER BY expires""",
+            (owner, cutoff),
+        ).fetchall()
+        if not rows:
+            return f"Nothing expires in the next {days} days."
+        today = date.today()
+        return "Use soon: " + ", ".join(
+            f"{r['name']} ({'expired' if date.fromisoformat(r['expires']) < today else r['expires']})"
+            for r in rows
+        ) + "."
+    except ValueError as exc:
+        return str(exc)
+    except Exception:
+        log.exception("expiring_soon failed")
+        return "Could not check expiry dates. Please try again."
 
 
 @mcp.tool()
-def suggest_recipe(mood: str = "", ctx: Context | None = None) -> str:  # noqa: E501
+def suggest_recipe(mood: str = "", ctx: Context | None = None) -> str:
     """Suggest one quick recipe that uses expiring items first (powered by Amazon Bedrock)."""
-    owner = get_owner(ctx)
-    rows = db().execute(
-        """SELECT name, qty, unit, expires FROM items
-           WHERE owner=?
-           ORDER BY expires IS NULL, expires""",
-        (owner,),
-    ).fetchall()
-    if not rows:
-        return "Your pantry is empty, so add some groceries first."
-    stock = "; ".join(
-        f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})"
-        for r in rows
-    )
-    prompt = (
-        f"Pantry: {stock}. Mood: {mood or 'any'}. Suggest ONE recipe under 30 minutes "
-        "that uses the soonest-expiring items first. "
-        "Reply in under 80 words, plain speech, no markdown."
-    )
+    if err := check_auth(ctx):
+        return err
     try:
-        return bedrock_converse(prompt, max_tokens=300)
-    except Exception as exc:
-        log.warning("Bedrock call failed (%s); using offline fallback.", exc)
-        return "Try a quick stir-fry with " + ", ".join(row["name"] for row in rows[:3]) + "."
+        owner = get_owner(ctx)
+        rows = db().execute(
+            """SELECT name, qty, unit, expires FROM items
+               WHERE owner=?
+               ORDER BY expires IS NULL, expires""",
+            (owner,),
+        ).fetchall()
+        if not rows:
+            return "Your pantry is empty, so add some groceries first."
+        stock = "; ".join(
+            f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})"
+            for r in rows
+        )
+        prompt = (
+            f"Pantry: {stock}. Mood: {mood or 'any'}. Suggest ONE recipe under 30 minutes "
+            "that uses the soonest-expiring items first. "
+            "Reply in under 80 words, plain speech, no markdown."
+        )
+        try:
+            return bedrock_converse(prompt, max_tokens=300)
+        except Exception as exc:
+            log.warning("Bedrock call failed (%s); using offline fallback.", exc)
+            return "Try a quick stir-fry with " + ", ".join(r["name"] for r in rows[:3]) + "."
+    except Exception:
+        log.exception("suggest_recipe failed")
+        return "Could not suggest a recipe right now. Please try again."
 
 
 @mcp.tool()
 def weekly_meal_plan(ctx: Context | None = None) -> str:
     """Plan 7 dinners for the week using pantry contents, starting with items expiring soonest."""
-    owner = get_owner(ctx)
-    rows = db().execute(
-        "SELECT name, qty, unit, expires FROM items WHERE owner=? ORDER BY expires IS NULL, expires",
-        (owner,),
-    ).fetchall()
-    if not rows:
-        return "Your pantry is empty. Add some groceries and I'll plan your week."
-    stock = "; ".join(f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})" for r in rows)
-    prompt = (
-        f"Pantry: {stock}. Plan 7 quick dinners (one per day) that use "
-        "soonest-expiring items first. Each dinner in one sentence. "
-        "Plain speech, no markdown, no numbering."
-    )
+    if err := check_auth(ctx):
+        return err
     try:
-        return bedrock_converse(prompt, max_tokens=400)
-    except Exception as exc:
-        log.warning("Bedrock weekly_meal_plan failed (%s); fallback.", exc)
-        names = ", ".join(r["name"] for r in rows[:7])
-        return f"This week try meals with: {names}. Use soonest-expiring items first."
+        owner = get_owner(ctx)
+        rows = db().execute(
+            "SELECT name, qty, unit, expires FROM items WHERE owner=? ORDER BY expires IS NULL, expires",
+            (owner,),
+        ).fetchall()
+        if not rows:
+            return "Your pantry is empty. Add some groceries and I'll plan your week."
+        stock = "; ".join(f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})" for r in rows)
+        prompt = (
+            f"Pantry: {stock}. Plan 7 quick dinners (one per day) that use "
+            "soonest-expiring items first. Each dinner in one sentence. "
+            "Plain speech, no markdown, no numbering."
+        )
+        try:
+            return bedrock_converse(prompt, max_tokens=400)
+        except Exception as exc:
+            log.warning("Bedrock weekly_meal_plan failed (%s); fallback.", exc)
+            names = ", ".join(r["name"] for r in rows[:7])
+            return f"This week try meals with: {names}. Use soonest-expiring items first."
+    except Exception:
+        log.exception("weekly_meal_plan failed")
+        return "Could not plan meals right now. Please try again."
 
 
 @mcp.tool()
 def waste_report(days: int = 7, ctx: Context | None = None) -> str:
     """Show a summary of items you consumed in the last N days (default 7)."""
-    owner = get_owner(ctx)
-    since = (date.today() - timedelta(days=days)).isoformat()
-    rows = db().execute(
-        """SELECT name, SUM(qty) AS total, unit FROM waste_log
-           WHERE owner=? AND logged_at>=?
-           GROUP BY name, unit ORDER BY total DESC""",
-        (owner, since),
-    ).fetchall()
-    if not rows:
-        return f"No items recorded as used in the last {days} days."
-    parts = ", ".join(f"{r['total']:g} {r['unit']} {r['name']}" for r in rows)
-    return f"In the last {days} days you used: {parts}."
+    if err := check_auth(ctx):
+        return err
+    try:
+        validate_positive(days, "Days")
+        owner = get_owner(ctx)
+        since = (date.today() - timedelta(days=days)).isoformat()
+        rows = db().execute(
+            """SELECT name, SUM(qty) AS total, unit FROM waste_log
+               WHERE owner=? AND logged_at>=?
+               GROUP BY name, unit ORDER BY total DESC""",
+            (owner, since),
+        ).fetchall()
+        if not rows:
+            return f"No items recorded as used in the last {days} days."
+        parts = ", ".join(f"{r['total']:g} {r['unit']} {r['name']}" for r in rows)
+        return f"In the last {days} days you used: {parts}."
+    except ValueError as exc:
+        return str(exc)
+    except Exception:
+        log.exception("waste_report failed")
+        return "Could not generate the report. Please try again."
 
 
 # ---------------------------------------------------------------------------

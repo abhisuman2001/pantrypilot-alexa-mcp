@@ -458,3 +458,110 @@ class TestWasteReport:
         assert "butter" not in result_b
 
 
+# ---------------------------------------------------------------------------
+# Step 6: Auth, input validation, no stack traces
+# ---------------------------------------------------------------------------
+
+class TestAuthAndValidation:
+    """Tests for check_auth, validate_name, validate_positive, and their
+    integration into tool functions."""
+
+    # --- validate_name ---
+    def test_validate_name_strips_and_lowercases(self):
+        assert s().validate_name("  EGGS  ") == "eggs"
+
+    def test_validate_name_rejects_empty(self):
+        import pytest
+        with pytest.raises(ValueError, match="empty"):
+            s().validate_name("   ")
+
+    def test_validate_name_rejects_too_long(self):
+        import pytest
+        with pytest.raises(ValueError, match="too long"):
+            s().validate_name("x" * 101)
+
+    def test_validate_name_accepts_100_chars(self):
+        name = "a" * 100
+        assert s().validate_name(name) == name
+
+    # --- validate_positive ---
+    def test_validate_positive_rejects_zero(self):
+        import pytest
+        with pytest.raises(ValueError, match="greater than zero"):
+            s().validate_positive(0)
+
+    def test_validate_positive_rejects_negative(self):
+        import pytest
+        with pytest.raises(ValueError, match="greater than zero"):
+            s().validate_positive(-5)
+
+    def test_validate_positive_accepts_positive(self):
+        s().validate_positive(0.1)   # should not raise
+
+    # --- Tool-level validation (returns friendly string, no exception) ---
+    def test_add_item_empty_name_returns_message(self):
+        result = s().add_item("  ")
+        assert "empty" in result.lower() or "cannot" in result.lower()
+
+    def test_add_item_zero_quantity_returns_message(self):
+        result = s().add_item("milk", quantity=0)
+        assert "greater than zero" in result.lower()
+
+    def test_add_item_negative_quantity_returns_message(self):
+        result = s().add_item("milk", quantity=-3)
+        assert "greater than zero" in result.lower()
+
+    def test_use_item_zero_quantity_returns_message(self):
+        result = s().use_item("milk", quantity=0)
+        assert "greater than zero" in result.lower()
+
+    def test_add_to_shopping_list_empty_name(self):
+        result = s().add_to_shopping_list("")
+        assert "empty" in result.lower() or "cannot" in result.lower()
+
+    def test_expiring_soon_zero_days_returns_message(self):
+        result = s().expiring_soon(days=0)
+        assert "greater than zero" in result.lower()
+
+    def test_waste_report_zero_days_returns_message(self):
+        result = s().waste_report(days=0)
+        assert "greater than zero" in result.lower()
+
+    # --- check_auth ---
+    def test_auth_disabled_when_key_unset(self, monkeypatch):
+        """MCP_API_KEY not set → auth always passes."""
+        monkeypatch.setattr(s(), "MCP_API_KEY", "")
+        assert s().check_auth(None) is None
+
+    def test_auth_passes_with_correct_bearer(self, monkeypatch):
+        monkeypatch.setattr(s(), "MCP_API_KEY", "secret123")
+        ctx = make_ctx()
+        ctx.request_context.request.headers.get.side_effect = (
+            lambda key, default="": "Bearer secret123" if key == "authorization" else default
+        )
+        assert s().check_auth(ctx) is None
+
+    def test_auth_fails_with_wrong_bearer(self, monkeypatch):
+        monkeypatch.setattr(s(), "MCP_API_KEY", "secret123")
+        ctx = make_ctx()
+        ctx.request_context.request.headers.get.side_effect = (
+            lambda key, default="": "Bearer wrongkey" if key == "authorization" else default
+        )
+        result = s().check_auth(ctx)
+        assert result is not None and "unauthorized" in result.lower()
+
+    def test_auth_skipped_for_none_ctx(self, monkeypatch):
+        """ctx=None (tests / stdio) → auth always passes even if key is set."""
+        monkeypatch.setattr(s(), "MCP_API_KEY", "secret123")
+        assert s().check_auth(None) is None
+
+    def test_tool_returns_friendly_message_on_unexpected_error(self, monkeypatch):
+        """Simulate DB blow-up: tool must return a string, not raise."""
+        import sqlite3
+        def broken_db():
+            raise sqlite3.DatabaseError("disk I/O error")
+        monkeypatch.setattr(s(), "db", broken_db)
+        result = s().list_pantry()
+        assert isinstance(result, str)
+        assert "traceback" not in result.lower()
+        assert len(result) > 0
