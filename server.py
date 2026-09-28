@@ -460,4 +460,21 @@ def waste_report(days: int = 7, ctx: Context | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")  # endpoint: http://0.0.0.0:8000/mcp
+    # Wrap the Starlette app with CORS middleware so simulator/index.html
+    # (opened from file:// or any origin) can call /mcp without CORS errors.
+    import uvicorn
+    from starlette.middleware.cors import CORSMiddleware
+
+    asgi = mcp.streamable_http_app()
+    asgi.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],              # fine for local / demo; tighten in prod
+        allow_methods=["POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Accept", "Authorization", "X-User-ID"],
+    )
+    uvicorn.run(
+        asgi,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        log_level="info",
+    )
