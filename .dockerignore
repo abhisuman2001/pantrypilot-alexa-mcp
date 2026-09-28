@@ -1,0 +1,32 @@
+# Secrets — NEVER in the image
+.env
+*.env
+*.key
+*.pem
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Test / dev only
+tests/
+conftest.py
+pytest.ini
+.pytest_cache/
+
+# Database (runtime data, not baked into image)
+*.db
+
+# Git / IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# CI / docs
+*.md
+LICENSE
+AGENTS.md
