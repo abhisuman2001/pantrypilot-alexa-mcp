@@ -74,17 +74,15 @@ $srcCfg = @{
 $tmpSrc = [System.IO.Path]::GetTempFileName() + ".json"
 
 if ($existing -and $existing -ne "None") {
-    Write-Host "  Updating existing service: $SERVICE_NAME"
+    Write-Host "  Image already in ECR. Triggering redeployment of: $SERVICE_NAME"
 
-    @{ ServiceArn = $existing; SourceConfiguration = $srcCfg } |
-        ConvertTo-Json -Depth 10 -Compress |
-        Set-Content -Encoding utf8 $tmpSrc
-
-    aws apprunner update-service `
-        --cli-input-json "file://$tmpSrc" `
+    # start-deployment tells App Runner to pull the latest image from ECR —
+    # no JSON payload needed, so no PS5.1 escaping issues.
+    aws apprunner start-deployment `
+        --service-arn $existing `
         --region $REGION | Out-Null
 
-    Write-Host "`n=== Update triggered! ===" -ForegroundColor Green
+    Write-Host "`n=== Deployment triggered! ===" -ForegroundColor Green
     Write-Host "Service will be live in ~2 min at https://kykh233phz.us-east-1.awsapprunner.com"
     Write-Host "MCP endpoint: https://kykh233phz.us-east-1.awsapprunner.com/mcp"
 } else {
