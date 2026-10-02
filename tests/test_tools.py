@@ -565,3 +565,148 @@ class TestAuthAndValidation:
         assert isinstance(result, str)
         assert "traceback" not in result.lower()
         assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Step 9: set_preferences / get_preferences_tool
+# ---------------------------------------------------------------------------
+
+class TestSetPreferences:
+    def test_set_diet_returns_confirmation(self):
+        result = s().set_preferences(diet="vegetarian")
+        assert "vegetarian" in result.lower()
+
+    def test_set_allergies_returns_confirmation(self):
+        result = s().set_preferences(allergies="nuts")
+        assert "nuts" in result.lower()
+
+    def test_set_dislikes_returns_confirmation(self):
+        result = s().set_preferences(dislikes="coriander mushrooms")
+        assert "coriander" in result.lower()
+
+    def test_set_all_fields(self):
+        result = s().set_preferences(diet="vegan", allergies="gluten", dislikes="onion")
+        assert "vegan" in result.lower()
+        assert "gluten" in result.lower()
+        assert "onion" in result.lower()
+
+    def test_empty_call_returns_helpful_message(self):
+        result = s().set_preferences()
+        assert "no preferences" in result.lower() or "provide" in result.lower() or "diet" in result.lower()
+
+    def test_get_preferences_empty(self):
+        result = s().get_preferences_tool()
+        assert "no preferences" in result.lower() or "none" in result.lower() or "yet" in result.lower()
+
+    def test_get_preferences_after_set(self):
+        srv = s()
+        srv.set_preferences(diet="vegetarian", allergies="nuts")
+        result = srv.get_preferences_tool()
+        assert "vegetarian" in result.lower()
+        assert "nuts" in result.lower()
+
+    def test_preferences_owner_isolation(self):
+        ctx_a = make_ctx("alice")
+        ctx_b = make_ctx("bob")
+        srv = s()
+        srv.set_preferences(diet="vegan", ctx=ctx_a)
+        result_b = srv.get_preferences_tool(ctx=ctx_b)
+        assert "vegan" not in result_b.lower()
+
+    def test_preferences_injected_into_suggest_recipe(self):
+        """Preferences should appear in the Bedrock prompt."""
+        srv = s()
+        srv.add_item("chicken", quantity=2, days_until_expiry=1)
+        srv.set_preferences(diet="vegetarian")
+        captured_prompts = []
+
+        mock_resp = {
+            "output": {"message": {"content": [
+                {"text": "Try a vegetable stir-fry."}
+            ]}}
+        }
+        mock_client = MagicMock()
+        mock_client.converse.side_effect = lambda **kwargs: (
+            captured_prompts.append(
+                kwargs["messages"][0]["content"][0]["text"]
+            ) or mock_resp
+        )
+        with patch("boto3.client", return_value=mock_client):
+            srv.suggest_recipe()
+
+        assert len(captured_prompts) == 1
+        assert "vegetarian" in captured_prompts[0].lower()
+
+    def test_no_markdown_in_output(self):
+        result = s().set_preferences(diet="keto")
+        for ch in ("#", "*", "_", "|", "`"):
+            assert ch not in result
+
+
+# ---------------------------------------------------------------------------
+# Step 9: schedule_meal / get_meal_schedule
+# ---------------------------------------------------------------------------
+
+class TestScheduleMeal:
+    def test_schedule_with_iso_date(self):
+        result = s().schedule_meal("pasta carbonara", meal_date="2026-10-10")
+        assert "pasta carbonara" in result.lower()
+        assert "2026-10-10" in result or "Oct" in result or "Saturday" in result
+
+    def test_schedule_today_default(self):
+        result = s().schedule_meal("omelette")
+        assert "omelette" in result.lower()
+
+    def test_schedule_tomorrow(self):
+        result = s().schedule_meal("soup", meal_date="tomorrow")
+        assert "soup" in result.lower()
+
+    def test_schedule_weekday_name(self):
+        result = s().schedule_meal("salad", meal_date="monday")
+        assert "salad" in result.lower()
+
+    def test_schedule_unknown_date_returns_error(self):
+        result = s().schedule_meal("pizza", meal_date="next fortnight")
+        assert "didn't understand" in result.lower() or "try" in result.lower()
+
+    def test_schedule_empty_recipe_returns_error(self):
+        result = s().schedule_meal("")
+        assert "provide" in result.lower() or "recipe" in result.lower()
+
+    def test_schedule_too_long_recipe_returns_error(self):
+        result = s().schedule_meal("x" * 301)
+        assert "too long" in result.lower()
+
+    def test_get_meal_schedule_empty(self):
+        result = s().get_meal_schedule()
+        assert "no meals" in result.lower()
+
+    def test_get_meal_schedule_shows_scheduled_meal(self):
+        srv = s()
+        today = date.today().isoformat()
+        srv.schedule_meal("stir-fry", meal_date=today)
+        result = srv.get_meal_schedule(days=1)
+        assert "stir-fry" in result.lower()
+
+    def test_get_meal_schedule_owner_isolation(self):
+        ctx_a = make_ctx("alice")
+        ctx_b = make_ctx("bob")
+        srv = s()
+        today = date.today().isoformat()
+        srv.schedule_meal("alice dish", meal_date=today, ctx=ctx_a)
+        result_b = srv.get_meal_schedule(days=7, ctx=ctx_b)
+        assert "alice dish" not in result_b.lower()
+
+    def test_get_meal_schedule_respects_days_window(self):
+        srv = s()
+        far_future = (date.today() + timedelta(days=30)).isoformat()
+        srv.schedule_meal("far future meal", meal_date=far_future)
+        result = srv.get_meal_schedule(days=7)
+        assert "far future meal" not in result.lower()
+
+    def test_no_markdown_in_output(self):
+        srv = s()
+        srv.schedule_meal("ramen", meal_date="today")
+        result = srv.get_meal_schedule()
+        for ch in ("#", "*", "_", "|", "`"):
+            assert ch not in result

@@ -19,11 +19,15 @@ PantryPilot gives Alexa+ a persistent household pantry plus Bedrock-powered reci
 | `use_item` | "Use 2 eggs" |
 | `list_pantry` | "What's in my pantry?" |
 | `expiring_soon` | "What's expiring this week?" |
-| `suggest_recipe` | "What can I cook tonight?" → Bedrock |
+| `suggest_recipe` | "What can I cook tonight?" → Bedrock (preference-aware) |
 | `add_to_shopping_list` | "Add milk to my shopping list" |
 | `get_shopping_list` | "Read my shopping list" |
-| `weekly_meal_plan` | "Plan my dinners for the week" → Bedrock |
+| `weekly_meal_plan` | "Plan my dinners for the week" → Bedrock (preference-aware) |
 | `waste_report` | "What did I use this week?" |
+| `set_preferences` | "I don't eat coriander" / "I'm vegetarian" |
+| `get_preferences_tool` | "What are my dietary preferences?" |
+| `schedule_meal` | "Plan pasta carbonara for Tuesday" |
+| `get_meal_schedule` | "What's on my meal plan this week?" |
 
 ---
 
@@ -87,7 +91,7 @@ npx -y @modelcontextprotocol/inspector
 
 ```bash
 .venv\Scripts\pytest tests/ -v
-# 64 passed
+# 86 passed
 ```
 
 ---
@@ -102,6 +106,13 @@ npx -y @modelcontextprotocol/inspector
 | `BEDROCK_MODEL_ID` | `amazon.nova-micro-v1:0` | Model (enable in console) |
 | `DEFAULT_OWNER` | `default` | Pantry owner when no header present |
 | `MCP_API_KEY` | _(empty)_ | Bearer token; empty = auth disabled |
+
+## Privacy & Terms
+
+Served inline by the App Runner deployment:
+- Privacy Policy: `https://kykh233phz.us-east-1.awsapprunner.com/privacy`
+- Terms of Use: `https://kykh233phz.us-east-1.awsapprunner.com/terms`
+- Health check: `https://kykh233phz.us-east-1.awsapprunner.com/health`
 
 ---
 
@@ -131,11 +142,14 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 
 ## Submission checklist
 
-- [x] All 9 tools callable via MCP Inspector and web simulator
-- [x] `pytest` passes (64 tests)
-- [x] Bedrock called in `suggest_recipe` and `weekly_meal_plan` (with offline fallback)
+- [x] All 13 tools callable via MCP Inspector and web simulator
+- [x] `pytest` passes (86 tests)
+- [x] Bedrock called in `suggest_recipe` and `weekly_meal_plan` (preference-aware, with offline fallback)
 - [x] Bearer-token auth (`MCP_API_KEY`), input validation, no stack traces exposed
 - [x] Deployed over HTTPS — `https://kykh233phz.us-east-1.awsapprunner.com/mcp`
+- [x] Privacy policy and Terms of Use served at `/privacy` and `/terms`
+- [x] `set_preferences`, `schedule_meal`, `get_meal_schedule` added (Step 9)
+- [ ] Redeploy to App Runner with new tools
 - [ ] Demo video recorded (≤ 3 min, voice demo first) — **record and link here**
 - [x] Devpost description written — see [SUBMISSION.md](SUBMISSION.md)
 - [x] Friction log completed (+10% bonus) — see [FRICTION_LOG.md](FRICTION_LOG.md) (7 items, severity + workaround + suggestion each)
