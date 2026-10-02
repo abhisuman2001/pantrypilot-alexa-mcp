@@ -8,7 +8,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # ── Config (edit these if needed) ──────────────────────────────────────────
-$REGION       = $env:AWS_REGION ?? "us-east-1"
+$REGION       = if ($env:AWS_REGION) { $env:AWS_REGION } else { "us-east-1" }
 $ACCOUNT      = (aws sts get-caller-identity --query Account --output text)
 $REPO_NAME    = "pantrypilot"
 $IMAGE_TAG    = "latest"
@@ -53,26 +53,40 @@ Write-Host "`n[5/5] Deploying to AWS App Runner..." -ForegroundColor Yellow
 # Check if service already exists
 $existing = aws apprunner list-services --region $REGION --query "ServiceSummaryList[?ServiceName=='$SERVICE_NAME'].ServiceArn" --output text 2>$null
 
+# Build source-configuration as a PS object then serialize — avoids all
+# inline JSON escaping issues in Windows PowerShell 5.1.
+$srcCfg = @{
+    ImageRepository = @{
+        ImageIdentifier     = $IMAGE_URI
+        ImageRepositoryType = "ECR"
+        ImageConfiguration  = @{
+            Port                        = "$PORT"
+            RuntimeEnvironmentVariables = @{
+                PORT       = "$PORT"
+                AWS_REGION = $REGION
+                PANTRY_DB  = "/data/pantry.db"
+            }
+        }
+    }
+    AutoDeploymentsEnabled = $false
+}
+
+$tmpSrc = [System.IO.Path]::GetTempFileName() + ".json"
+
 if ($existing -and $existing -ne "None") {
     Write-Host "  Updating existing service: $SERVICE_NAME"
+
+    @{ ServiceArn = $existing; SourceConfiguration = $srcCfg } |
+        ConvertTo-Json -Depth 10 -Compress |
+        Set-Content -Encoding utf8 $tmpSrc
+
     aws apprunner update-service `
-        --service-arn $existing `
-        --source-configuration "{
-          \"ImageRepository\": {
-            \"ImageIdentifier\": \"$IMAGE_URI\",
-            \"ImageRepositoryType\": \"ECR\",
-            \"ImageConfiguration\": {
-              \"Port\": \"$PORT\",
-              \"RuntimeEnvironmentVariables\": {
-                \"PORT\": \"$PORT\",
-                \"AWS_REGION\": \"$REGION\",
-                \"PANTRY_DB\": \"/data/pantry.db\"
-              }
-            }
-          },
-          \"AutoDeploymentsEnabled\": false
-        }" `
+        --cli-input-json "file://$tmpSrc" `
         --region $REGION | Out-Null
+
+    Write-Host "`n=== Update triggered! ===" -ForegroundColor Green
+    Write-Host "Service will be live in ~2 min at https://kykh233phz.us-east-1.awsapprunner.com"
+    Write-Host "MCP endpoint: https://kykh233phz.us-east-1.awsapprunner.com/mcp"
 } else {
     Write-Host "  Creating new App Runner service: $SERVICE_NAME"
 
@@ -91,25 +105,16 @@ if ($existing -and $existing -ne "None") {
         Write-Host "  Created IAM role: $ROLE_ARN"
     }
 
+    $srcCfg.AuthenticationConfiguration = @{ AccessRoleArn = $ROLE_ARN }
+
+    @{
+        ServiceName           = $SERVICE_NAME
+        SourceConfiguration   = $srcCfg
+        InstanceConfiguration = @{ Cpu = "0.25 vCPU"; Memory = "0.5 GB" }
+    } | ConvertTo-Json -Depth 10 -Compress | Set-Content -Encoding utf8 $tmpSrc
+
     $svc = aws apprunner create-service `
-        --service-name $SERVICE_NAME `
-        --source-configuration "{
-          \"ImageRepository\": {
-            \"ImageIdentifier\": \"$IMAGE_URI\",
-            \"ImageRepositoryType\": \"ECR\",
-            \"ImageConfiguration\": {
-              \"Port\": \"$PORT\",
-              \"RuntimeEnvironmentVariables\": {
-                \"PORT\": \"$PORT\",
-                \"AWS_REGION\": \"$REGION\",
-                \"PANTRY_DB\": \"/tmp/pantry.db\"
-              }
-            }
-          },
-          \"AutoDeploymentsEnabled\": false,
-          \"AuthenticationConfiguration\": {\"AccessRoleArn\": \"$ROLE_ARN\"}
-        }" `
-        --instance-configuration '{"Cpu":"0.25 vCPU","Memory":"0.5 GB"}' `
+        --cli-input-json "file://$tmpSrc" `
         --region $REGION | ConvertFrom-Json
 
     $SERVICE_URL = $svc.Service.ServiceUrl
@@ -121,4 +126,5 @@ if ($existing -and $existing -ne "None") {
     Write-Host "  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BEDROCK_MODEL_ID, MCP_API_KEY"
 }
 
+Remove-Item -ErrorAction SilentlyContinue $tmpSrc
 Write-Host "`nDone. Check status at: https://$REGION.console.aws.amazon.com/apprunner" -ForegroundColor Cyan
