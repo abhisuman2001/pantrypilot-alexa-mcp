@@ -44,7 +44,9 @@ print(f"\n=== PantryPilot Live Test ===\nEndpoint: {MCP}\n")
 print("[1] tools/list")
 r = call("tools/list")
 tools = [t["name"] for t in r.get("result", {}).get("tools", [])]
-ok = len(tools) == 9
+# Core tools from the original contract; the server may expose more.
+CORE = {"add_item", "use_item", "list_pantry", "expiring_soon", "suggest_recipe"}
+ok = CORE.issubset(tools)
 print(f"  [{'PASS' if ok else 'FAIL'}] Got {len(tools)} tools: {', '.join(tools)}")
 PASS += ok; FAIL += (not ok)
 
@@ -67,7 +69,8 @@ check("expiring_soon", r, "live-test-apple")
 print("\n[5] suggest_recipe -- tests Bedrock Converse API")
 r = call("tools/call", "suggest_recipe", {"mood": "quick dinner"})
 text = check("suggest_recipe", r)
-bedrock_used = "fallback" not in text.lower() and "sorry" not in text.lower()
+# server.py returns this exact prefix only when the Bedrock call failed.
+bedrock_used = bool(text) and not text.startswith("Try a quick stir-fry with")
 print(f"  [{'PASS' if bedrock_used else 'WARN'}] Bedrock {'called successfully' if bedrock_used else 'fell back to offline mode'}")
 
 # 6. use_item (cleanup)
