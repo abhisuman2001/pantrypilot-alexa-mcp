@@ -62,15 +62,18 @@ The server starts with **CORS enabled** so the web simulator works out of the bo
 
 ## Web Simulator (demo asset)
 
-Open `simulator/index.html` in a browser **while the server is running**:
+The server hosts the simulator at `/`. Start the server, then open:
 
 ```
-file:///path/to/pantry-pilot/simulator/index.html
+http://localhost:8000/                                  # local
+https://kykh233phz.us-east-1.awsapprunner.com/          # live, no setup needed
 ```
+
+The page calls `/mcp` on the same server it was loaded from. Serving it over http(s) (not `file://`) is also what lets the browser microphone work.
 
 Features:
 - Alexa-style voice chat UI (dark mode, animated ring)
-- One-click quick actions for all 9 tools
+- One-click quick actions for the pantry, shopping list, and recipe tools
 - Forms for Add Item / Use Item / Add to Shopping List
 - 🎤 Web Speech API voice input (Chrome/Edge)
 - Natural language parsing: "add 6 eggs expire 10 days", "what can I cook?", etc.
