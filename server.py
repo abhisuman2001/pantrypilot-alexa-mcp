@@ -693,7 +693,8 @@ def _friendly_date(iso: str) -> str:
     """Convert ISO date to a friendly string like 'Wednesday Oct 7'."""
     try:
         d = date.fromisoformat(iso)
-        return d.strftime("%A %b %-d")
+        # %-d (no-pad day) is Linux-only; use lstrip('0') for portability
+        return d.strftime("%A %b ") + str(d.day)
     except Exception:
         return iso
 
@@ -707,10 +708,10 @@ if __name__ == "__main__":
     # (opened from file:// or any origin) can call /mcp without CORS errors.
     # Also serve static /privacy and /terms pages for Alexa+ add-on registration.
     import uvicorn
+    from pathlib import Path
     from starlette.middleware.cors import CORSMiddleware
     from starlette.routing import Route
-    from starlette.responses import HTMLResponse
-    from starlette.applications import Starlette
+    from starlette.responses import HTMLResponse, FileResponse
 
     _PRIVACY_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -771,27 +772,24 @@ recipe suggestions.</p>
         return HTMLResponse('{"status":"ok","service":"PantryPilot"}',
                             media_type="application/json")
 
+    _SIM_PATH = Path(__file__).parent / "simulator" / "index.html"
+
+    async def simulator(request):
+        """Serve the Alexa+ simulator at / so the Web Speech API works
+        (microphone requires http://localhost or https://, not file://)."""
+        return FileResponse(_SIM_PATH, media_type="text/html")
+
     mcp_asgi = mcp.streamable_http_app()
 
-    # Combine MCP app + static routes under one Starlette app
-    static_routes = [
-        Route("/privacy", privacy),
-        Route("/terms", terms),
-        Route("/health", health),
-    ]
-    static_app = Starlette(routes=static_routes)
+    # Insert extra routes *before* the MCP catch-all so /privacy, /terms,
+    # /health, / are reachable, but the MCP app's own lifespan (which starts
+    # the session-manager task group) stays intact.
+    mcp_asgi.routes.insert(0, Route("/", simulator))
+    mcp_asgi.routes.insert(0, Route("/privacy", privacy))
+    mcp_asgi.routes.insert(0, Route("/terms", terms))
+    mcp_asgi.routes.insert(0, Route("/health", health))
 
-    from starlette.routing import Mount
-    from starlette.applications import Starlette as _Starlette
-
-    combined = _Starlette(routes=[
-        Route("/privacy", privacy),
-        Route("/terms", terms),
-        Route("/health", health),
-        Mount("/", app=mcp_asgi),
-    ])
-
-    combined.add_middleware(
+    mcp_asgi.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],              # fine for local / demo; tighten in prod
         allow_methods=["POST", "GET", "OPTIONS"],
@@ -799,7 +797,7 @@ recipe suggestions.</p>
     )
 
     uvicorn.run(
-        combined,
+        mcp_asgi,
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
         log_level="info",
