@@ -1,6 +1,6 @@
 """Live smoke-test for the PantryPilot App Runner deployment.
 Calls tools/list, add_item, list_pantry, expiring_soon, and suggest_recipe (Bedrock).
-Usage: python test_live.py [url]
+Usage: python scripts/live_smoke.py [url]
 """
 import urllib.request, json, sys, time
 

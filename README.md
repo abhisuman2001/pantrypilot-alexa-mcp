@@ -93,8 +93,15 @@ npx -y @modelcontextprotocol/inspector
 ## Run tests
 
 ```bash
-.venv\Scripts\pytest tests/ -v
+.venv\Scripts\pytest -v
 # 86 passed
+```
+
+Smoke-test a deployed server end to end (including a real Bedrock call):
+
+```bash
+python scripts/live_smoke.py                                   # live App Runner URL
+python scripts/live_smoke.py http://localhost:8000             # or any other base URL
 ```
 
 ---
