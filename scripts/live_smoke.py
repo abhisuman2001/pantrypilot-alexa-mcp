@@ -69,9 +69,11 @@ check("expiring_soon", r, "live-test-apple")
 print("\n[5] suggest_recipe -- tests Bedrock Converse API")
 r = call("tools/call", "suggest_recipe", {"mood": "quick dinner"})
 text = check("suggest_recipe", r)
-# server.py returns this exact prefix only when the Bedrock call failed.
-bedrock_used = bool(text) and not text.startswith("Try a quick stir-fry with")
-print(f"  [{'PASS' if bedrock_used else 'WARN'}] Bedrock {'called successfully' if bedrock_used else 'fell back to offline mode'}")
+# /health reports the outcome of the most recent Bedrock call.
+with urllib.request.urlopen(f"{BASE}/health", timeout=30) as h:
+    bedrock = json.loads(h.read()).get("bedrock", "unknown")
+bedrock_used = bedrock == "ok"
+print(f"  [{'PASS' if bedrock_used else 'WARN'}] Bedrock {'called successfully' if bedrock_used else 'not used, offline recipes (' + bedrock + ')'}")
 
 # 6. use_item (cleanup)
 print("\n[6] use_item (cleanup live-test-apple)")

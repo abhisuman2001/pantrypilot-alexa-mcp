@@ -29,6 +29,8 @@ from botocore.config import Config as BotoCfg
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Context
 
+import offline_recipes
+
 load_dotenv()  # picks up .env for local dev; env vars override in production
 
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +52,10 @@ DB = os.getenv("PANTRY_DB", "pantry.db")
 MODEL = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-micro-v1:0")
 DEFAULT_OWNER = os.getenv("DEFAULT_OWNER", "default")
 MCP_API_KEY = os.getenv("MCP_API_KEY", "")  # empty → auth disabled (local dev)
+
+# Result of the most recent Bedrock call, reported by /health:
+# "unknown" (no call yet), "ok", or "fallback: <error type>".
+BEDROCK_STATUS = "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -169,21 +175,28 @@ def bedrock_converse(prompt: str, max_tokens: int = 350) -> str:
     connect_timeout=5s, read_timeout=15s, max_attempts=1 (no SDK retries –
     we handle fallback in each caller).
     """
-    client = boto3.client(
-        "bedrock-runtime",
-        region_name=os.getenv("AWS_REGION", "us-east-1"),
-        config=BotoCfg(
-            connect_timeout=5,
-            read_timeout=15,
-            retries={"max_attempts": 1},
-        ),
-    )
-    resp = client.converse(
-        modelId=MODEL,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"maxTokens": max_tokens},
-    )
-    return resp["output"]["message"]["content"][0]["text"].strip()
+    global BEDROCK_STATUS
+    try:
+        client = boto3.client(
+            "bedrock-runtime",
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+            config=BotoCfg(
+                connect_timeout=5,
+                read_timeout=15,
+                retries={"max_attempts": 1},
+            ),
+        )
+        resp = client.converse(
+            modelId=MODEL,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": max_tokens},
+        )
+        text = resp["output"]["message"]["content"][0]["text"].strip()
+    except Exception as exc:
+        BEDROCK_STATUS = f"fallback: {type(exc).__name__}"
+        raise
+    BEDROCK_STATUS = "ok"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +460,8 @@ def suggest_recipe(mood: str = "", ctx: Context | None = None) -> str:
             return bedrock_converse(prompt, max_tokens=300)
         except Exception as exc:
             log.warning("Bedrock call failed (%s); using offline fallback.", exc)
-            return "Try a quick stir-fry with " + ", ".join(r["name"] for r in rows[:3]) + "."
+            return (offline_recipes.suggest(rows, prefs, mood)
+                    or "Try a quick stir-fry with " + ", ".join(r["name"] for r in rows[:3]) + ".")
     except Exception:
         log.exception("suggest_recipe failed")
         return "Could not suggest a recipe right now. Please try again."
@@ -480,7 +494,8 @@ def weekly_meal_plan(ctx: Context | None = None) -> str:
         except Exception as exc:
             log.warning("Bedrock weekly_meal_plan failed (%s); fallback.", exc)
             names = ", ".join(r["name"] for r in rows[:7])
-            return f"This week try meals with: {names}. Use soonest-expiring items first."
+            return (offline_recipes.week_plan(rows, prefs)
+                    or f"This week try meals with: {names}. Use soonest-expiring items first.")
     except Exception:
         log.exception("weekly_meal_plan failed")
         return "Could not plan meals right now. Please try again."
@@ -711,7 +726,7 @@ if __name__ == "__main__":
     from pathlib import Path
     from starlette.middleware.cors import CORSMiddleware
     from starlette.routing import Route
-    from starlette.responses import HTMLResponse, FileResponse
+    from starlette.responses import HTMLResponse, FileResponse, JSONResponse
 
     _PRIVACY_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -769,8 +784,8 @@ recipe suggestions.</p>
         return HTMLResponse(_TERMS_HTML)
 
     async def health(request):
-        return HTMLResponse('{"status":"ok","service":"PantryPilot"}',
-                            media_type="application/json")
+        return JSONResponse({"status": "ok", "service": "PantryPilot",
+                             "bedrock": BEDROCK_STATUS})
 
     _SIM_PATH = Path(__file__).parent / "simulator" / "index.html"
 

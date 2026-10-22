@@ -14,7 +14,7 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code and static assets
-COPY server.py .
+COPY server.py offline_recipes.py ./
 COPY simulator/ ./simulator/
 
 # Database lives in /data so it can be mounted as a volume in production.
