@@ -823,7 +823,7 @@ async function send() {
   userSay(txt); setMicState('thinking');
   const t = typing();
   try {
-    const { tool, args } = parse(txt.toLowerCase());
+    const { tool, args } = parse(txt);
     const r = await call(tool, args);
     rm(t); alexaSay(r); probe(); refreshPantry();
   } catch(e) {
@@ -835,48 +835,114 @@ async function send() {
   setMicState('idle');
 }
 
-function parse(t) {
-  if (/week|meal plan/.test(t))
-    return { tool:'weekly_meal_plan', args:{} };
-  if (/waste|report|consumed/.test(t)) {
-    const d = t.match(/(\d+)\s*day/);
-    return { tool:'waste_report', args: d ? {days:+d[1]} : {} };
-  }
-  if (/expir|expire|going bad|use soon/.test(t)) {
-    const d = t.match(/(\d+)\s*day/);
-    return { tool:'expiring_soon', args: d ? {days:+d[1]} : {} };
-  }
-  if (/recipe|cook|make|tonight|dinner|lunch|eat/.test(t)) {
-    const mood = t.replace(/(recipe|cook|make|tonight|dinner|lunch|eat)/,'').trim();
-    return { tool:'suggest_recipe', args: mood ? {mood} : {} };
-  }
-  if (/shopping list/.test(t) && !/add/.test(t))
+/* Speech recognition often returns number words ("six eggs"); turn them into digits */
+const NUM_WORDS = {
+  one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10,
+  eleven:11, twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16,
+  seventeen:17, eighteen:18, nineteen:19, twenty:20, thirty:30, dozen:12
+};
+const UNITS = 'pcs|pieces?|kg|kilos?|grams?|g|litres?|liters?|l|ml|bottles?|cans?|bags?|box(?:es)?|packs?|cups?|cartons?|loa(?:f|ves)|bunch(?:es)?|jars?';
+
+function normalize(t) {
+  return t.toLowerCase()
+    .replace(/[?!.,"]/g, ' ')
+    .replace(/\ba couple of\b/g, '2')
+    .replace(/\ba dozen\b/g, '12')
+    .replace(/\b[a-z]+\b/g, w => NUM_WORDS[w] ?? w)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* "6 eggs" / "2 kg of rice" / "the milk" → { name, quantity, unit } */
+function item(s) {
+  s = s.trim().replace(/^(?:a|an|some)\s+/, '');
+  const m = s.match(new RegExp(String.raw`^(?:(\d+(?:\.\d+)?)\s*)?(?:(${UNITS})\b\s*)?(?:of\s+)?(.*)$`));
+  const name = (m[3] || '').replace(/^(?:a|an|the|some|my)\s+/, '').trim();
+  return { name, quantity: m[1] ? +m[1] : 1, unit: m[2] || 'pcs' };
+}
+
+/* "expire in 10 days" / "goes bad in 2 weeks" / "expires tomorrow" → days */
+function expiryDays(t) {
+  if (/\b(?:expir\w*|goes bad|go bad)\s+tomorrow\b/.test(t)) return 1;
+  const m = t.match(/\b(?:expir\w*|goes bad|go bad|good for|lasts?)\s+(?:in\s+|for\s+)?(\d+)\s*(day|week)s?/);
+  return m ? +m[1] * (m[2] === 'week' ? 7 : 1) : null;
+}
+
+/* "this week" → 7, "10 days" → 10, else null (tool default) */
+function windowDays(t) {
+  const m = t.match(/(\d+)\s*(day|week)s?/);
+  if (m) return +m[1] * (m[2] === 'week' ? 7 : 1);
+  return /\bweek\b/.test(t) ? 7 : null;
+}
+
+function parse(raw) {
+  const t = normalize(raw);
+  const days = windowDays(t);
+
+  // Dietary preferences
+  if (/\bwhat are my\b.*\bpreferences\b|\bmy (?:dietary )?preferences\b/.test(t))
+    return { tool:'get_preferences_tool', args:{} };
+  let m = t.match(/\b(?:i'?m|i am)\s+(?:a\s+)?(vegetarian|vegan|pescatarian|keto|gluten free|dairy free)\b/);
+  if (m) return { tool:'set_preferences', args:{ diet:m[1] } };
+  m = t.match(/\bi (?:don'?t|do not) (?:eat|like)\s+(.+)$/);
+  if (m) return { tool:'set_preferences', args:{ dislikes:m[1] } };
+  m = t.match(/\b(?:i'?m|i am) allergic to\s+(.+)$/);
+  if (m) return { tool:'set_preferences', args:{ allergies:m[1] } };
+
+  // Shopping list (check before "add" so "add milk to my shopping list" lands here)
+  if (/\b(?:shopping|grocery) list\b/.test(t)) {
+    if (/^(?:please\s+)?(?:add|put)\b/.test(t)) {
+      const it = item(t.replace(/^(?:please\s+)?(?:add|put)\s+/, '')
+                      .replace(/\s+(?:to|on)\s+(?:my\s+|the\s+)?(?:shopping|grocery) list.*$/, ''));
+      if (it.name) return { tool:'add_to_shopping_list', args:it };
+    }
     return { tool:'get_shopping_list', args:{} };
-  if (/add.*shopping|shopping.*add/.test(t)) {
-    const m = t.match(/(\d+(?:\.\d+)?)\s*(\w+)?\s+(?:of\s+)?(\w[\w\s]*?)(?:\s+to|\s*$)/);
-    if (m) return { tool:'add_to_shopping_list',
-                    args:{ name:m[3].trim(), quantity:+m[1], unit:m[2]||'pcs' } };
   }
-  if (/list|pantry|have|stock/.test(t))
-    return { tool:'list_pantry', args:{} };
-  if (/use|used|finish|consume/.test(t)) {
-    const m = t.match(/(?:use|used|finish|consume)\s+(\d+(?:\.\d+)?)?\s*(?:of\s+)?(\w[\w\s]*)/);
-    if (m) return { tool:'use_item', args:{ name:m[2].trim(), quantity:m[1]?+m[1]:1 } };
-  }
-  if (/add|bought|got|purchase/.test(t)) {
-    const qty  = (t.match(/(\d+(?:\.\d+)?)/) || [])[1];
-    const days = (t.match(/expir\w*\s*i?n?\s*(\d+)/) || [])[1];
-    const name = t.replace(/add|bought|got|purchase/g,'')
-                  .replace(/\d+(?:\.\d+)?/,'')
-                  .replace(/expir\w*\s*i?n?\s*\d+\s*days?/,'')
-                  .replace(/\b(pcs|kg|g|litre|liter|bottle|can|bag|box|pack|cup|cups)\b/,'')
-                  .trim();
-    if (name) {
-      const a = { name, quantity: qty ? +qty : 1 };
-      if (days) a.days_until_expiry = +days;
-      return { tool:'add_item', args:a };
+
+  // Meal schedule: read it, or "plan pasta for tuesday"
+  if (/\bwhat'?s on my meal plan\b|\bmeal schedule\b|\bwhat am i (?:cooking|eating)\b/.test(t))
+    return { tool:'get_meal_schedule', args: days ? {days} : {} };
+  m = t.match(/^(?:plan|schedule)\s+(.+?)\s+for\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})$/);
+  if (m) return { tool:'schedule_meal', args:{ recipe:m[1], meal_date:m[2] } };
+
+  // Add to pantry: "add 6 eggs that expire in 10 days", "i bought 2 kg of rice"
+  if (/^(?:please\s+)?(?:add|put|i bought|bought|i got|got|purchase)\b/.test(t)) {
+    const exp = expiryDays(t);
+    const it = item(t.replace(/^(?:please\s+)?(?:add|put|i bought|bought|i got|got|purchase)\s+/, '')
+                    .replace(/\s*\b(?:that|which|it|they)?\s*\b(?:expir\w*|goes bad|go bad|good for|lasts?)\b.*$/, '')
+                    .replace(/\s+(?:to|in|into)\s+(?:my\s+|the\s+)?(?:pantry|fridge|kitchen)$/, ''));
+    if (it.name) {
+      const args = { name:it.name, quantity:it.quantity, unit:it.unit };
+      if (exp) args.days_until_expiry = exp;
+      return { tool:'add_item', args };
     }
   }
+
+  // Use up: "use 2 eggs", "i used the milk", "i finished the bread"
+  m = t.match(/^(?:i\s+)?(?:use|used|finish|finished|consume|consumed|ate)\s+(.+)$/);
+  if (m) {
+    const it = item(m[1]);
+    if (it.name) return { tool:'use_item', args:{ name:it.name, quantity:it.quantity } };
+  }
+
+  // Report / expiry / weekly plan — waste and expiry first because they also say "week"
+  if (/\bwaste\b|\breport\b|\bwhat did i (?:use|eat)\b|\bconsumed\b/.test(t))
+    return { tool:'waste_report', args: days ? {days} : {} };
+  if (/\bexpir|\bgoing bad\b|\buse soon\b|\bgoing off\b/.test(t))
+    return { tool:'expiring_soon', args: days ? {days} : {} };
+  if (/\bmeal plan\b|\bplan my\b|\bfor the week\b|\bweekly\b/.test(t))
+    return { tool:'weekly_meal_plan', args:{} };
+
+  // Recipe: keep only words that describe a mood ("something quick", "italian")
+  if (/\brecipe|\bcook|\bmake\b|\btonight\b|\bdinner\b|\blunch\b|\bbreakfast\b|\beat\b|\bhungry\b/.test(t)) {
+    const mood = t.replace(/\b(?:what|what's|can|could|should|i|we|cook|make|for|tonight|today|dinner|lunch|breakfast|recipe|recipes|suggest|a|an|me|give|idea|ideas|eat|to|with|something|some|please|alexa|have|im|i'm|hungry)\b/g, ' ')
+                  .replace(/\s+/g, ' ').trim();
+    return { tool:'suggest_recipe', args: mood ? {mood} : {} };
+  }
+
+  if (/\blist\b|\bpantry\b|\bhave\b|\bstock\b|\bfridge\b/.test(t))
+    return { tool:'list_pantry', args:{} };
+
   return { tool:'suggest_recipe', args:{ mood:t } };
 }
 
@@ -885,6 +951,7 @@ const chat = () => document.getElementById('chat');
 const convBody = () => document.getElementById('conv-body');
 
 function userSay(txt) {
+  hasInteracted = true;
   // Fade hero after first interaction
   const hero = document.getElementById('hero');
   if (hero) hero.style.display = 'none';
@@ -912,6 +979,19 @@ function alexaSay(txt) {
      </div>`);
   icons(chat().querySelectorAll('.msg:last-child'));
   scrollChat();
+  speak(txt);
+}
+
+/* ─── Spoken replies ─────────────────────────────────── */
+/* Browsers block speech until the user interacts, so the greeting stays silent */
+let hasInteracted = false;
+function speak(txt) {
+  if (!hasInteracted || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  // "6 pcs of eggs" → "6 eggs" so the voice doesn't spell out "p c s"
+  const u = new SpeechSynthesisUtterance(txt.replace(/\b(\d+(?:\.\d+)?) pcs (?:of )?/g, '$1 '));
+  u.lang = 'en-US';
+  speechSynthesis.speak(u);
 }
 
 function typing() {
@@ -980,6 +1060,16 @@ function toggleMic() {
     recActive = false;
     btn.classList.remove('rec');
     setMicState('idle');
+    return;
+  }
+
+  // Stop Alexa talking so the mic doesn't hear her, and free the wake-word
+  // recognizer: Chrome runs only one SpeechRecognition at a time.
+  hasInteracted = true;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  if (wakeActive && !wakePaused) {
+    pauseWakeListener();
+    setTimeout(toggleMic, 300);  // stop() is async; give Chrome time to release the mic
     return;
   }
 
