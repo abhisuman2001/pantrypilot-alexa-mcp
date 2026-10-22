@@ -35,8 +35,10 @@ if ($LASTEXITCODE -ne 0) {
 
 # ── Step 2: Docker login to ECR ────────────────────────────────────────────
 Write-Host "`n[2/5] Logging in to ECR..." -ForegroundColor Yellow
-aws ecr get-login-password --region $REGION |
-    docker login --username AWS --password-stdin $ECR_REGISTRY
+# Pipe through cmd: PowerShell 5.1 re-encodes native-to-native pipes, which
+# corrupts the token and makes ECR answer "400 Bad Request".
+cmd /c "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY"
+if ($LASTEXITCODE -ne 0) { throw "ECR login failed" }
 
 # ── Step 3: Build image ────────────────────────────────────────────────────
 Write-Host "`n[3/5] Building Docker image..." -ForegroundColor Yellow
