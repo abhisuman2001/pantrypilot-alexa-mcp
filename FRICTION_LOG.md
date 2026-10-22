@@ -125,4 +125,26 @@ Fail fast at startup (or log a clear warning) when the app is mounted without it
 
 ---
 
-*Total friction items: 8 | High: 4 | Medium: 2 | Low: 2*
+## FR-09 — Bedrock blocked account-wide although model access shows AUTHORIZED
+**Severity:** High  
+**Phase:** Step 9 (final verification before submission)
+
+**What happened:**  
+Every Converse call fails with `ValidationException: Error 002: Access to Bedrock models is not allowed for this account`. Using the same IAM credentials:
+- `sts:GetCallerIdentity` succeeds.
+- `bedrock:ListFoundationModels` succeeds.
+- `GetFoundationModelAvailability` for Nova Micro returns `authorizationStatus: AUTHORIZED`, `entitlementAvailability: AVAILABLE`, `regionAvailability: AVAILABLE`.
+
+Nova Micro, Nova Lite and Llama 3 8B all fail the same way, in us-east-1 and us-west-2. The account is new and holds about $200 of sign-up credits. The likely cause is the AWS Free account plan, but this is unconfirmed: the error does not say why, and the IAM user is not allowed to call `freetier:GetAccountPlanState`. Our earlier smoke test reported "Bedrock verified" because it treated the offline fallback text as success.
+
+**Workaround:**  
+Kept the Bedrock integration in code and added an offline recipe book (`offline_recipes.py`). It ranks recipes by how many soon-expiring items they use and respects dietary preferences, so the voice demo still works. `/health` now reports the last Bedrock outcome, so the fallback is visible instead of silent. We did not upgrade to the Paid plan because this is an unfunded hackathon project.
+
+**Suggestion:**  
+1. Make "Error 002" say why access is blocked (for example "not available on the Free plan") and link to the fix.
+2. Make `GetFoundationModelAvailability` report account-level blocks; today it says `AUTHORIZED` for a model the account cannot call.
+3. Let Free-plan accounts call at least one small first-party model (such as Nova Micro) against their credits, so hackathon builders can use Bedrock without adding a payment risk.
+
+---
+
+*Total friction items: 9 | High: 5 | Medium: 2 | Low: 2*

@@ -9,7 +9,7 @@
 
 ## What we built
 
-**PantryPilot** is a self-hosted MCP server that gives Alexa+ a persistent household pantry and Bedrock-powered recipe suggestions — all by voice.
+**PantryPilot** is a self-hosted MCP server that gives Alexa+ a persistent household pantry and recipe suggestions that use expiring food first — all by voice. Recipes come from Amazon Bedrock, with a built-in recipe book as fallback.
 
 > "Alexa, add six eggs that expire in ten days."  
 > "What's expiring soon?"  
@@ -29,7 +29,7 @@ PantryPilot fights food waste by always recommending recipes that use the soones
 |---|---|
 | MCP server | `mcp` Python SDK 1.30 (FastMCP), Streamable HTTP transport at `/mcp`, protocol 2025-11-25 |
 | Storage | SQLite (multi-user, scoped by `X-User-ID` header) |
-| AI / recipes | Amazon Bedrock Converse API — `amazon.nova-micro-v1:0` |
+| AI / recipes | Amazon Bedrock Converse API — `amazon.nova-micro-v1:0`; offline recipe book (`offline_recipes.py`) as fallback |
 | Deploy | Docker → Amazon ECR → AWS App Runner (HTTPS) |
 | Auth | Optional bearer token (`MCP_API_KEY` env var) |
 | Demo UI | `simulator/index.html` — Alexa-style voice chat, served by the server at `/` |
@@ -42,17 +42,19 @@ PantryPilot fights food waste by always recommending recipes that use the soones
 | `use_item` | "Use 2 eggs" (adds to shopping list when it runs out) | No |
 | `list_pantry` | "What's in my pantry?" | No |
 | `expiring_soon` | "What's expiring this week?" | No |
-| `suggest_recipe` | "What can I cook tonight?" | **Yes** |
+| `suggest_recipe` | "What can I cook tonight?" | **Yes** (offline recipe book fallback) |
 | `add_to_shopping_list` | "Add milk to my list" | No |
 | `get_shopping_list` | "Read my shopping list" | No |
-| `weekly_meal_plan` | "Plan my dinners for the week" | **Yes** |
+| `weekly_meal_plan` | "Plan my dinners for the week" | **Yes** (offline recipe book fallback) |
 | `waste_report` | "What did I use this week?" | No |
 | `set_preferences` | "I'm vegetarian" / "I don't eat coriander" | No (feeds Bedrock prompts) |
 | `get_preferences_tool` | "What are my dietary preferences?" | No |
 | `schedule_meal` | "Plan pasta carbonara for Tuesday" | No |
 | `get_meal_schedule` | "What's on my meal plan this week?" | No |
 
-All responses are **voice-first**: short, speakable sentences — no markdown, no tables, no emojis. Bedrock calls have a 5 s connect / 15 s read timeout and capped `maxTokens` (300 for a recipe, 400 for a weekly plan); on any error the tool returns an offline suggestion built from the expiring items instead of failing.
+All responses are **voice-first**: short, speakable sentences — no markdown, no tables, no emojis. Bedrock calls have a 5 s connect / 15 s read timeout and capped `maxTokens` (300 for a recipe, 400 for a weekly plan); on any error the tool falls back to `offline_recipes.py`: 21 recipes ranked by how many soon-expiring items they use, filtered by diet, dislikes and allergies. `/health` reports whether the last Bedrock call succeeded.
+
+> **Bedrock status in the live demo:** our AWS account is blocked from calling Bedrock models (see [FR-09](FRICTION_LOG.md)), so the live demo serves recipes from the offline recipe book. The Bedrock integration is real code (`bedrock_converse()` in `server.py`) and runs first on every recipe request; it works as soon as the server runs with credentials for an account that has Bedrock access.
 
 ---
 
@@ -72,7 +74,7 @@ Full details and suggestions in [FRICTION_LOG.md](FRICTION_LOG.md).
 ## What we learned
 
 - FastMCP makes MCP server development fast once the SDK version is pinned correctly.
-- Amazon Bedrock's Converse API is clean to use but requires manual model activation — a friction point worth flagging.
+- Amazon Bedrock's Converse API is clean to code against, but account-level access can block it with no explanation. A good offline fallback matters for a voice product.
 - Designing tools to be voice-first (short, speakable, no formatting) requires conscious discipline — it's easy to slip into markdown habits.
 - AWS App Runner is a good fit for this use case: HTTPS by default, no load balancer or Nginx config required.
 
@@ -98,7 +100,8 @@ Everything in this repo was built during the submission window (first commit 202
 - Alexa-style web simulator with voice input (Step 7)
 - Docker → ECR → App Runner deploy, privacy and terms pages (Step 8)
 - Dietary preferences and meal scheduling, preference-aware Bedrock prompts (Step 9)
-- 86 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and Bedrock
+- Offline recipe book for when Bedrock is unavailable; Bedrock status in `/health`
+- 105 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
 
 **Repo:** https://github.com/abhisuman2001/pantrypilot-alexa-mcp  
 **Live MCP:** https://kykh233phz.us-east-1.awsapprunner.com/mcp
@@ -118,10 +121,10 @@ Feedback on every tool, API, and SDK we used. AWS services used for the AWS Buil
 
 ### Amazon Bedrock — Converse API with Amazon Nova Micro [AWS]
 - **Used for:** `suggest_recipe` and `weekly_meal_plan`; prompts list expiring items first plus the user's dietary preferences.
-- **Worked well:** the Converse API is model-agnostic and the response shape is simple. Nova Micro is fast and cheap enough for voice latency.
-- **Needs work:** models are not enabled by default, and `AccessDeniedException` does not link to the Model access page.
-- **Onboarding:** about 15 minutes lost to model access; smooth after that.
-- **Would build again:** yes.
+- **Worked well:** the Converse API is model-agnostic with a simple request and response shape, and it was easy to mock in tests. Wrapping it with a 5 s / 15 s timeout and a fallback took a few lines.
+- **Needs work:** our account could never complete a call. Every model in every region returned `Error 002: Access to Bedrock models is not allowed for this account`, while `GetFoundationModelAvailability` reported Nova Micro as `AUTHORIZED`. The error gives no reason or fix; the likely cause is the Free account plan (see FR-09).
+- **Onboarding:** confusing. Everything looked enabled, and the only blocker was an unexplained account-level error found the day before the deadline.
+- **Would build again:** yes, if Free-plan accounts could call a small first-party model, or the error explained the fix.
 
 ### AWS App Runner [AWS]
 - **Used for:** hosting the MCP server and simulator over HTTPS.

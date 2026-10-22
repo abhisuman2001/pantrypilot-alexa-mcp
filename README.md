@@ -7,7 +7,9 @@ Track: **Alexa+** (self-hosted MCP server, Streamable HTTP) | Mini challenge: **
 > "What can I cook tonight?"  
 > "Plan my dinners for the week."
 
-PantryPilot gives Alexa+ a persistent household pantry plus Bedrock-powered recipes that use the soonest-expiring food first — reducing food waste one voice command at a time.
+PantryPilot gives Alexa+ a persistent household pantry plus recipes that use the soonest-expiring food first — reducing food waste one voice command at a time. Recipes come from Amazon Bedrock, with a built-in recipe book (`offline_recipes.py`) when Bedrock is unavailable.
+
+> **Note:** our AWS account is currently blocked from calling Bedrock models ([FR-09](FRICTION_LOG.md)), so the live demo uses the offline recipe book. `GET /health` shows the last Bedrock result.
 
 ---
 
@@ -19,10 +21,10 @@ PantryPilot gives Alexa+ a persistent household pantry plus Bedrock-powered reci
 | `use_item` | "Use 2 eggs" |
 | `list_pantry` | "What's in my pantry?" |
 | `expiring_soon` | "What's expiring this week?" |
-| `suggest_recipe` | "What can I cook tonight?" → Bedrock (preference-aware) |
+| `suggest_recipe` | "What can I cook tonight?" → Bedrock, offline recipe book fallback (preference-aware) |
 | `add_to_shopping_list` | "Add milk to my shopping list" |
 | `get_shopping_list` | "Read my shopping list" |
-| `weekly_meal_plan` | "Plan my dinners for the week" → Bedrock (preference-aware) |
+| `weekly_meal_plan` | "Plan my dinners for the week" → Bedrock, offline recipe book fallback (preference-aware) |
 | `waste_report` | "What did I use this week?" |
 | `set_preferences` | "I don't eat coriander" / "I'm vegetarian" |
 | `get_preferences_tool` | "What are my dietary preferences?" |
@@ -94,10 +96,10 @@ npx -y @modelcontextprotocol/inspector
 
 ```bash
 .venv\Scripts\pytest -v
-# 86 passed
+# 105 passed
 ```
 
-Smoke-test a deployed server end to end (including a real Bedrock call):
+Smoke-test a deployed server end to end (it also reports whether Bedrock answered or the offline recipes were used):
 
 ```bash
 python scripts/live_smoke.py                                   # live App Runner URL
@@ -153,8 +155,9 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 ## Submission checklist
 
 - [x] All 13 tools callable via MCP Inspector and web simulator
-- [x] `pytest` passes (86 tests)
-- [x] Bedrock called in `suggest_recipe` and `weekly_meal_plan` (preference-aware, with offline fallback)
+- [x] `pytest` passes (105 tests)
+- [x] Bedrock called in code in `suggest_recipe` and `weekly_meal_plan` (preference-aware, offline recipe book fallback)
+- [ ] Bedrock answering live — blocked at the AWS account level, see [FR-09](FRICTION_LOG.md)
 - [x] Bearer-token auth (`MCP_API_KEY`), input validation, no stack traces exposed
 - [x] Deployed over HTTPS — `https://kykh233phz.us-east-1.awsapprunner.com/mcp`
 - [x] Privacy policy and Terms of Use served at `/privacy` and `/terms`
@@ -163,7 +166,7 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 - [ ] Demo video recorded (≤ 3 min, voice demo first) — **record and link here**
 - [x] Devpost description written — see [SUBMISSION.md](SUBMISSION.md)
 - [x] Product feedback for every tool/API/SDK used — see [SUBMISSION.md](SUBMISSION.md#product-feedback-required)
-- [x] Friction log completed (+10% bonus) — see [FRICTION_LOG.md](FRICTION_LOG.md) (8 items, severity + workaround + suggestion each)
+- [x] Friction log completed (+10% bonus) — see [FRICTION_LOG.md](FRICTION_LOG.md) (9 items, severity + workaround + suggestion each)
 
 > **Demo note:** the live deployment runs with `MCP_API_KEY` unset so judges can call it without a key. The pantry is shared demo data and resets on every redeploy.
 
