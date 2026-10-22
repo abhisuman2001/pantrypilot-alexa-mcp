@@ -58,7 +58,7 @@ Publish a step-by-step "Register an MCP server with Alexa+" guide as part of the
 AWS App Runner uses an ephemeral container filesystem. Setting `PANTRY_DB=/tmp/pantry.db` means the pantry is wiped on every redeploy or container restart, making the live demo unreliable for multi-session testing.
 
 **Workaround:**  
-Designed the schema to be re-created on startup (`CREATE TABLE IF NOT EXISTS`). For the demo, items are re-added before recording. The code already supports `DATABASE_URL` for Postgres (Step 3 multi-user path).
+Designed the schema to be re-created on startup (`CREATE TABLE IF NOT EXISTS`). For the demo, items are re-added before recording. Durable storage (a managed database) is future work.
 
 **Suggestion:**  
 App Runner should support EFS mounts or a managed SQLite-compatible key-value store for lightweight persistent state. Alternatively, document the recommended pattern for ephemeral-container apps that need durable local storage.
@@ -110,4 +110,19 @@ Document all public ASGI/transport methods in the FastMCP API reference, includi
 
 ---
 
-*Total friction items: 7 | High: 3 | Medium: 2 | Low: 2*
+## FR-08 — Wrapping `streamable_http_app()` silently breaks every MCP call
+**Severity:** High  
+**Phase:** Step 8 / Step 9 (adding `/privacy`, `/terms`, `/health` routes)
+
+**What happened:**  
+To serve extra pages next to `/mcp`, we mounted `mcp.streamable_http_app()` inside a new Starlette app. The server started and `/health` returned 200, but every `/mcp` request returned HTTP 500 with `RuntimeError: Task group is not initialized. Make sure to use run().` The mounted app's lifespan never runs, so the session manager never starts. The deployed endpoint was broken without any startup error.
+
+**Workaround:**  
+Inserted the extra routes into the MCP app's own `routes` list instead of wrapping it, so its lifespan stays intact. `scripts/live_smoke.py` now checks the deployed `/mcp` after every deploy.
+
+**Suggestion:**  
+Fail fast at startup (or log a clear warning) when the app is mounted without its lifespan, and document the supported way to add custom routes (`@mcp.custom_route`) next to `streamable_http_app()`. The current error message points at `run()`, which is not what the developer called.
+
+---
+
+*Total friction items: 8 | High: 4 | Medium: 2 | Low: 2*

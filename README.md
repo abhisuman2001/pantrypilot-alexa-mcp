@@ -162,5 +162,8 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 - [ ] Redeploy to App Runner with new tools
 - [ ] Demo video recorded (≤ 3 min, voice demo first) — **record and link here**
 - [x] Devpost description written — see [SUBMISSION.md](SUBMISSION.md)
-- [x] Friction log completed (+10% bonus) — see [FRICTION_LOG.md](FRICTION_LOG.md) (7 items, severity + workaround + suggestion each)
+- [x] Product feedback for every tool/API/SDK used — see [SUBMISSION.md](SUBMISSION.md#product-feedback-required)
+- [x] Friction log completed (+10% bonus) — see [FRICTION_LOG.md](FRICTION_LOG.md) (8 items, severity + workaround + suggestion each)
+
+> **Demo note:** the live deployment runs with `MCP_API_KEY` unset so judges can call it without a key. The pantry is shared demo data and resets on every redeploy.
 
