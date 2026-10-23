@@ -5,7 +5,8 @@ Track: **Alexa+** (self-hosted MCP server, Streamable HTTP) | Mini challenge: **
 > "Alexa, add six eggs that expire in ten days."  
 > "What's expiring soon?"  
 > "What can I cook tonight?"  
-> "Plan my dinners for the week."
+> "Plan my dinners for the week."  
+> "Which medicines expire this month?"
 
 PantryPilot gives Alexa+ a persistent household pantry plus recipes that use the soonest-expiring food first — reducing food waste one voice command at a time. Recipes come from Amazon Bedrock, with a built-in recipe book (`offline_recipes.py`) when Bedrock is unavailable.
 
@@ -30,6 +31,16 @@ PantryPilot gives Alexa+ a persistent household pantry plus recipes that use the
 | `get_preferences_tool` | "What are my dietary preferences?" |
 | `schedule_meal` | "Plan pasta carbonara for Tuesday" |
 | `get_meal_schedule` | "What's on my meal plan this week?" |
+| `add_medicine` | "Add a bottle of paracetamol 500 mg that expires March 2027" |
+| `list_medicines` | "What's in my medicine cabinet?" |
+| `medicines_expiring` | "Which medicines expire this month?" |
+| `find_medicine` | "Do we have any allergy tablets?" |
+| `use_medicine` | "I used the last of the cough syrup" |
+| `remove_expired_medicines` | "Remove expired medicines" |
+
+### Medicine cabinet: inventory only, never medical advice
+
+Families keep half-forgotten medicines for years. PantryPilot tracks them like food: expiry dates as printed on the pack ("03/2027", "March 2027"), oldest batch used first, expired stock flagged and never "used", and safe disposal guidance (pharmacy take-back). Questions about dosing, safety, or which medicine to take get a fixed reply pointing to the label, a pharmacist, or a doctor; the same guard keeps medical questions out of the Bedrock recipe prompt.
 
 ---
 
@@ -96,7 +107,7 @@ npx -y @modelcontextprotocol/inspector
 
 ```bash
 .venv\Scripts\pytest -v
-# 105 passed
+# 154 passed
 ```
 
 Smoke-test a deployed server end to end (it also reports whether Bedrock answered or the offline recipes were used):
@@ -154,14 +165,15 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 
 ## Submission checklist
 
-- [x] All 13 tools callable via MCP Inspector and web simulator
-- [x] `pytest` passes (105 tests)
+- [x] All 19 tools callable via MCP Inspector and web simulator
+- [x] `pytest` passes (154 tests)
 - [x] Bedrock called in code in `suggest_recipe` and `weekly_meal_plan` (preference-aware, offline recipe book fallback)
 - [ ] Bedrock answering live — blocked at the AWS account level, see [FR-09](FRICTION_LOG.md)
 - [x] Bearer-token auth (`MCP_API_KEY`), input validation, no stack traces exposed
 - [x] Deployed over HTTPS — `https://kykh233phz.us-east-1.awsapprunner.com/mcp`
 - [x] Privacy policy and Terms of Use served at `/privacy` and `/terms`
 - [x] `set_preferences`, `schedule_meal`, `get_meal_schedule` added (Step 9)
+- [x] Medicine cabinet: 6 tools, inventory only, medical-advice guard
 - [ ] Redeploy to App Runner with new tools
 - [ ] Demo video recorded (≤ 3 min, voice demo first) — **record and link here**
 - [x] Devpost description written — see [SUBMISSION.md](SUBMISSION.md)

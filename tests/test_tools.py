@@ -34,18 +34,7 @@ import pytest
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-def tmp_db(tmp_path, monkeypatch):
-    """Fresh SQLite DB + reload server for every test."""
-    db_path = str(tmp_path / "test_pantry.db")
-    monkeypatch.setenv("PANTRY_DB", db_path)
-    monkeypatch.setenv("DEFAULT_OWNER", "default")
-
-    import server
-    importlib.reload(server)
-    monkeypatch.setattr(server, "DB", db_path)
-    monkeypatch.setattr(server, "DEFAULT_OWNER", "default")
-    return db_path
+# tmp_db (autouse) lives in conftest.py so every test file gets a fresh DB.
 
 
 def s():

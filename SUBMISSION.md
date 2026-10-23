@@ -14,7 +14,8 @@
 > "Alexa, add six eggs that expire in ten days."  
 > "What's expiring soon?"  
 > "What can I cook tonight?"  
-> "Plan my dinners for the week."
+> "Plan my dinners for the week."  
+> "Which medicines expire this month?"
 
 PantryPilot fights food waste by always recommending recipes that use the soonest-expiring ingredients first. The server is deployed on AWS App Runner and reachable at:
 
@@ -34,7 +35,7 @@ PantryPilot fights food waste by always recommending recipes that use the soones
 | Auth | Optional bearer token (`MCP_API_KEY` env var) |
 | Demo UI | `simulator/index.html` — Alexa-style voice chat, served by the server at `/` |
 
-### The 13 tools
+### The 19 tools
 
 | Tool | What Alexa says | Uses Bedrock? |
 |---|---|---|
@@ -51,6 +52,16 @@ PantryPilot fights food waste by always recommending recipes that use the soones
 | `get_preferences_tool` | "What are my dietary preferences?" | No |
 | `schedule_meal` | "Plan pasta carbonara for Tuesday" | No |
 | `get_meal_schedule` | "What's on my meal plan this week?" | No |
+| `add_medicine` | "Add a bottle of paracetamol 500 mg that expires March 2027" | No |
+| `list_medicines` | "What's in my medicine cabinet?" | No |
+| `medicines_expiring` | "Which medicines expire this month?" | No |
+| `find_medicine` | "Do we have any allergy tablets?" | No |
+| `use_medicine` | "I used the last of the cough syrup" | No |
+| `remove_expired_medicines` | "Remove expired medicines" | No |
+
+### Medicine cabinet: inventory only, never medical advice
+
+The same expiry problem exists in every home's medicine cabinet, where it is a safety issue, not just waste. PantryPilot tracks medicines with pack-style expiry dates ("03/2027", "March 2027"), uses the oldest unexpired batch first, refuses to "use" expired stock, and gives safe disposal guidance (pharmacy take-back). It never gives dosing or treatment advice: such questions get a fixed reply pointing to the label, a pharmacist, or a doctor, and the same guard keeps medical questions out of the Bedrock prompt.
 
 All responses are **voice-first**: short, speakable sentences — no markdown, no tables, no emojis. Bedrock calls have a 5 s connect / 15 s read timeout and capped `maxTokens` (300 for a recipe, 400 for a weekly plan); on any error the tool falls back to `offline_recipes.py`: 21 recipes ranked by how many soon-expiring items they use, filtered by diet, dislikes and allergies. `/health` reports whether the last Bedrock call succeeded.
 
@@ -101,7 +112,8 @@ Everything in this repo was built during the submission window (first commit 202
 - Docker → ECR → App Runner deploy, privacy and terms pages (Step 8)
 - Dietary preferences and meal scheduling, preference-aware Bedrock prompts (Step 9)
 - Offline recipe book for when Bedrock is unavailable; Bedrock status in `/health`
-- 105 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
+- Medicine cabinet (6 tools) with pack-style expiry parsing, oldest-batch-first use, and a medical-advice guard
+- 154 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
 
 **Repo:** https://github.com/abhisuman2001/pantrypilot-alexa-mcp  
 **Live MCP:** https://kykh233phz.us-east-1.awsapprunner.com/mcp

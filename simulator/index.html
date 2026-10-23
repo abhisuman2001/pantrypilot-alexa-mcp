@@ -559,6 +559,8 @@
         <button class="pill" onclick="qa('list_pantry')"><i data-lucide="package"></i>List pantry</button>
         <button class="pill" onclick="qa('weekly_meal_plan')"><i data-lucide="calendar-days"></i>Weekly plan</button>
         <button class="pill" onclick="qa('waste_report')"><i data-lucide="bar-chart-3"></i>Waste report</button>
+        <button class="pill" onclick="qa('list_medicines')"><i data-lucide="pill"></i>Medicine cabinet</button>
+        <button class="pill" onclick="qa('medicines_expiring')"><i data-lucide="shield-alert"></i>Medicine expiry</button>
       </div>
 
       <!-- Inline forms (toggle open) -->
@@ -751,7 +753,8 @@ async function call(name, args={}) {
 const LABELS = {
   list_pantry:'List pantry', expiring_soon:"What's expiring soon?",
   suggest_recipe:'Suggest a recipe', get_shopping_list:'Show shopping list',
-  weekly_meal_plan:'Plan my week', waste_report:'Show waste report (7 days)'
+  weekly_meal_plan:'Plan my week', waste_report:'Show waste report (7 days)',
+  list_medicines:"What's in my medicine cabinet?", medicines_expiring:'Which medicines are expiring?'
 };
 
 async function qa(tool) {
@@ -824,6 +827,12 @@ async function send() {
   const t = typing();
   try {
     const { tool, args } = parse(txt);
+    if (!tool) {
+      rm(t);
+      alexaSay("Sorry, I can't help with that. I can manage your pantry, shopping list, meal plans and medicine cabinet. Try: what's expiring soon?");
+      setMicState('idle');
+      return;
+    }
     const r = await call(tool, args);
     rm(t); alexaSay(r); probe(); refreshPantry();
   } catch(e) {
@@ -856,7 +865,7 @@ function normalize(t) {
 /* "6 eggs" / "2 kg of rice" / "the milk" → { name, quantity, unit } */
 function item(s) {
   s = s.trim().replace(/^(?:a|an|some)\s+/, '');
-  const m = s.match(new RegExp(String.raw`^(?:(\d+(?:\.\d+)?)\s*)?(?:(${UNITS})\b\s*)?(?:of\s+)?(.*)$`));
+  const m = s.match(new RegExp(String.raw`^(?:(-?\d+(?:\.\d+)?)\s*)?(?:(${UNITS})\b\s*)?(?:of\s+)?(.*)$`));
   const name = (m[3] || '').replace(/^(?:a|an|the|some|my)\s+/, '').trim();
   return { name, quantity: m[1] ? +m[1] : 1, unit: m[2] || 'pcs' };
 }
@@ -873,6 +882,59 @@ function windowDays(t) {
   const m = t.match(/(\d+)\s*(day|week)s?/);
   if (m) return +m[1] * (m[2] === 'week' ? 7 : 1);
   return /\bweek\b/.test(t) ? 7 : null;
+}
+
+/* Words that mark a sentence as being about the medicine cabinet */
+const MED_WORDS = /\b(?:medicines?|medications?|meds|medicine cabinet|tablets?|pills?|capsules?|syrup|inhaler|drops|\d+(?:\.\d+)?\s?(?:mg|mcg)|paracetamol|acetaminophen|ibuprofen|aspirin|cetirizine|loratadine|antihistamines?|antacids?|amoxicillin|insulin|vitamins?|plasters|bandages)\b/;
+const MED_FORMS = 'bottles?|packs?|box(?:es)?|tubes?|inhalers?|strips?|sachets?|blister packs?';
+
+/* "add a bottle of paracetamol 500 mg that expires march 2027" → add_medicine args */
+function medItem(s) {
+  const args = {};
+  let m = s.match(/\b(?:that\s+|which\s+|it\s+)?(?:expir\w*|exp)\s+(?:in\s+|on\s+)?(.+)$/);
+  if (m) {
+    const d = m[1].match(/^(\d+)\s*(day|week|month)s?$/);
+    if (d) args.days_until_expiry = +d[1] * ({ day:1, week:7, month:30 })[d[2]];
+    else args.expiry = m[1];
+    s = s.slice(0, m.index);
+  }
+  m = s.match(/\b(\d+(?:\.\d+)?)\s?(mg|mcg|ml)\b/);
+  if (m) { args.strength = `${m[1]} ${m[2]}`; s = s.replace(m[0], ' '); }
+  m = s.match(/^(?:(\d+(?:\.\d+)?)|a|an|one)?\s*/);
+  if (m[1]) args.quantity = +m[1];
+  s = s.slice(m[0].length);
+  m = s.match(new RegExp(String.raw`^(${MED_FORMS})\s+(?:of\s+)?`));
+  if (m) { args.form = m[1].replace(/(?:es|s)$/, '').replace(/^blister pack$/, 'pack'); s = s.slice(m[0].length); }
+  args.name = s.replace(/\b(?:to|in|into)\s+(?:my\s+|the\s+)?medicine cabinet\b/, '')
+               .replace(/\b(?:tablets?|pills?|capsules?)\b/g, '').replace(/\s+/g, ' ').trim();
+  return args;
+}
+
+function parseMedicine(t, days) {
+  const about = MED_WORDS.test(t);
+  // Dosing / safety questions: the server answers with a pointer to a pharmacist
+  if (about && /\b(?:dose|dosage|how (?:much|many|often)|can i (?:take|give|mix)|should i|safe|side effects?|pregnan\w*)\b/.test(t))
+    return { tool:'find_medicine', args:{ query:t } };
+  if (/\b(?:remove|clear|throw (?:out|away)|get rid of|dispose of)\b.*\bexpired\b/.test(t) && about)
+    return { tool:'remove_expired_medicines', args:{} };
+  if (about && /\bexpir/.test(t) && !/^(?:please\s+)?(?:add|put|i bought|bought|i got|got)\b/.test(t))
+    return { tool:'medicines_expiring', args: days ? {days} : /\bmonth\b/.test(t) ? {days:30} : {} };
+  if (/\bmedicine cabinet\b|\b(?:list|what are) my (?:medicines|medications|meds)\b/.test(t) && !/^(?:please\s+)?add\b/.test(t))
+    return { tool:'list_medicines', args:{} };
+  let m = t.match(/^(?:do (?:we|i) have|have (?:we|i) got|is there|are there|find|where(?:'s| is))\s+(?:any\s+|some\s+)?(.+)$/);
+  if (m && about) return { tool:'find_medicine', args:{ query:m[1] } };
+  if (!about) return null;
+  m = t.match(/^(?:please\s+)?(?:add|put|i bought|bought|i got|got)\s+(.+)$/);
+  if (m) {
+    const args = medItem(m[1]);
+    if (args.name) return { tool:'add_medicine', args };
+  }
+  m = t.match(/^(?:i\s+)?(?:use|used|finish|finished|took|take)\s+(?:up\s+)?(?:the\s+last\s+(?:of\s+)?(?:the\s+)?)?(.+)$/);
+  if (m) {
+    const { name, quantity } = medItem(m[1].replace(/^(?:the|my)\s+/, ''));
+    if (name) return { tool:'use_medicine', args: quantity ? { name, quantity } : { name } };
+  }
+  return null;
 }
 
 function parse(raw) {
@@ -904,6 +966,10 @@ function parse(raw) {
     return { tool:'get_meal_schedule', args: days ? {days} : {} };
   m = t.match(/^(?:plan|schedule)\s+(.+?)\s+for\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})$/);
   if (m) return { tool:'schedule_meal', args:{ recipe:m[1], meal_date:m[2] } };
+
+  // Medicine cabinet (before pantry add/use, which would otherwise catch "add paracetamol")
+  const med = parseMedicine(t, days);
+  if (med) return med;
 
   // Add to pantry: "add 6 eggs that expire in 10 days", "i bought 2 kg of rice"
   if (/^(?:please\s+)?(?:add|put|i bought|bought|i got|got|purchase)\b/.test(t)) {
@@ -943,7 +1009,7 @@ function parse(raw) {
   if (/\blist\b|\bpantry\b|\bhave\b|\bstock\b|\bfridge\b/.test(t))
     return { tool:'list_pantry', args:{} };
 
-  return { tool:'suggest_recipe', args:{ mood:t } };
+  return { tool:null, args:{} };  // not understood: answered locally in send()
 }
 
 /* ─── Chat helpers ───────────────────────────────────── */
