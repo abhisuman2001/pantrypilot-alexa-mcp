@@ -110,6 +110,15 @@ Features:
 - 🎤 Web Speech API voice input (Chrome/Edge)
 - Natural language parsing: "add 6 eggs expire 10 days", "what can I cook?", etc.
 - Settings panel: configure server URL + API key
+- Optional studio-quality voice from [ElevenLabs](https://elevenlabs.io) (see below); otherwise the best browser voice
+
+### Optional: ElevenLabs voice
+
+Set `ELEVENLABS_API_KEY` on the server and the simulator speaks replies with an ElevenLabs voice. The page posts the reply text to the server's `/tts` endpoint, and the server calls ElevenLabs, so the key never reaches the browser. Without a key, or if a call fails, the simulator falls back to the browser voice.
+
+To protect the account's credits on a public server, `/tts` accepts at most 400 characters per request and 20 requests per visitor every 10 minutes, caches repeated phrases, and stops after `ELEVENLABS_CHAR_BUDGET` characters (8000 by default, reset on restart).
+
+This only changes the simulator. Real Alexa+ reads PantryPilot's replies in Alexa's own voice.
 
 ---
 
@@ -148,7 +157,7 @@ Local development works the same with `http://localhost:8000/mcp`.
 
 ```bash
 .venv\Scripts\pytest -v
-# 160 passed
+# 168 passed
 ```
 
 Smoke-test a deployed server end to end (it also reports whether Bedrock answered or the offline recipes were used):
@@ -170,6 +179,10 @@ python scripts/live_smoke.py http://localhost:8000             # or any other ba
 | `BEDROCK_MODEL_ID` | `amazon.nova-micro-v1:0` | Model (enable in console) |
 | `DEFAULT_OWNER` | `default` | Pantry owner when no header present |
 | `MCP_API_KEY` | _(empty)_ | Bearer token; empty = auth disabled |
+| `ELEVENLABS_API_KEY` | _(empty)_ | Optional simulator voice; empty = browser voice |
+| `ELEVENLABS_VOICE_ID` | `EXAVITQu4vr4xnSDxMaL` (Sarah) | ElevenLabs voice |
+| `ELEVENLABS_MODEL_ID` | `eleven_flash_v2_5` | ElevenLabs model |
+| `ELEVENLABS_CHAR_BUDGET` | `8000` | Characters sent to ElevenLabs before `/tts` turns off |
 
 ## Privacy & Terms
 
@@ -207,7 +220,7 @@ The MCP endpoint to register is: https://<your-domain>/mcp
 ## Submission checklist
 
 - [x] All 20 tools callable via MCP Inspector and web simulator
-- [x] `pytest` passes (160 tests)
+- [x] `pytest` passes (168 tests)
 - [x] Bedrock called in code in `suggest_recipe` and `weekly_meal_plan` (preference-aware, offline recipe book fallback)
 - [ ] Bedrock answering live — blocked at the AWS account level, see [FR-09](FRICTION_LOG.md)
 - [x] Bearer-token auth (`MCP_API_KEY`), input validation, no stack traces exposed

@@ -1078,8 +1078,10 @@ function loadVoices() {
   fillVoiceSelect();
 }
 
-function bestVoice() {
-  if (VOICE_NAME) { const v = voices.find(v => v.name === VOICE_NAME); if (v) return v; }
+function bestVoice(choice = VOICE_NAME) {
+  if (choice && choice !== ELEVEN && choice !== BROWSER) {
+    const v = voices.find(v => v.name === choice); if (v) return v;
+  }
   for (const re of VOICE_PREFS) {
     const v = voices.find(v => re.test(v.name) && /en-US/i.test(v.lang)) || voices.find(v => re.test(v.name));
     if (v) return v;
@@ -1106,10 +1108,63 @@ function utter(text, voice) {
   return u;
 }
 
-function speak(txt) {
-  if (!hasInteracted || !('speechSynthesis' in window)) return;
-  speechSynthesis.cancel();
-  const voice = bestVoice();
+/* ElevenLabs via the server's /tts proxy (the API key never reaches this page).
+   Off when the server has no key; any failure falls back to the browser voice. */
+const ELEVEN = '__eleven', BROWSER = '__browser';
+let elevenOn = false, audioEl = null, speakSeq = 0;
+
+function ttsUrl(path) { return URL.replace(/\/mcp\/?$/, '') + path; }
+
+async function probeTts() {
+  try {
+    const r = await fetch(ttsUrl('/tts/status'));
+    elevenOn = r.ok && (await r.json()).enabled === true;
+  } catch (_) { elevenOn = false; }
+  fillVoiceSelect();
+}
+
+function useEleven(choice = VOICE_NAME) { return elevenOn && (choice === '' || choice === ELEVEN); }
+
+function stopSpeaking() {
+  speakSeq++;
+  if (audioEl) { audioEl.pause(); audioEl = null; }
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+/* Speak with ElevenLabs; resolves true once playback starts, false to fall back */
+async function speakEleven(text, seq, onend) {
+  try {
+    const r = await fetch(ttsUrl('/tts'), { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    if (!r.ok) { if (r.status === 503) elevenOn = false; return false; }
+    const blob = await r.blob();
+    if (seq !== speakSeq) return true;            // something newer started talking
+    const a = new Audio(window.URL.createObjectURL(blob));
+    a.onended = () => { window.URL.revokeObjectURL(a.src); if (audioEl === a) audioEl = null; onend && onend(); };
+    audioEl = a;
+    await a.play();
+    return true;
+  } catch (_) { return false; }
+}
+
+/* Say text, then call onend (used by the wake word: "Yes?" then listen) */
+async function speakThen(text, onend) {
+  stopSpeaking();
+  const seq = speakSeq;
+  if (useEleven() && await speakEleven(text, seq, onend)) return;
+  if (seq !== speakSeq || !('speechSynthesis' in window)) { onend && onend(); return; }
+  const u = utter(text, bestVoice());
+  u.onend = () => onend && onend();
+  speechSynthesis.speak(u);
+}
+
+async function speak(txt, choice = VOICE_NAME) {
+  if (!hasInteracted) return;
+  stopSpeaking();
+  const seq = speakSeq;
+  if (useEleven(choice) && txt.length <= 400 && await speakEleven(speechText(txt), seq)) return;
+  if (seq !== speakSeq || !('speechSynthesis' in window)) return;
+  const voice = bestVoice(choice);
   // One utterance per sentence: natural pauses between sentences, and Chrome's
   // Google voices stop mid-sentence on a single utterance longer than ~15 s.
   const sentences = speechText(txt).match(/[^.!?]+[.!?]*/g) || [txt];
@@ -1121,23 +1176,23 @@ function fillVoiceSelect() {
   if (!sel) return;
   const sorted = [...voices].sort((a, b) => isNatural(b) - isNatural(a) || a.name.localeCompare(b.name));
   const best = bestVoice();
-  sel.innerHTML = '<option value="">Automatic (most natural available)</option>' + sorted.map(v =>
+  sel.innerHTML = '<option value="">Automatic (most natural available)</option>' +
+    (elevenOn ? `<option value="${ELEVEN}">ElevenLabs studio voice ★ most natural</option>` : '') +
+    `<option value="${BROWSER}">Browser voice (best available)</option>` + sorted.map(v =>
     `<option value="${esc(v.name)}">${esc(v.name)}${isNatural(v) ? ' ★ natural' : ''}</option>`).join('');
   sel.value = VOICE_NAME;
   const hint = document.getElementById('voice-hint');
-  if (hint) hint.textContent = best
+  if (hint) hint.textContent = useEleven() ? 'Using the ElevenLabs voice (voice by ElevenLabs).' : best
     ? (isNatural(best) ? `Using ${best.name}.` : `Using ${best.name}. For a more natural voice, open this page in Microsoft Edge.`)
     : 'No speech voices found in this browser.';
 }
 
 function testVoice() {
   hasInteracted = true;
-  const name = el('s-voice').value;
-  const prev = VOICE_NAME; VOICE_NAME = name;
-  speak("Hi, I'm PantryPilot. Your spinach expires tomorrow, so how about an omelette tonight?");
-  VOICE_NAME = prev;
+  speak("Hi, I'm PantryPilot. Your spinach expires tomorrow, so how about an omelette tonight?", el('s-voice').value);
 }
 
+probeTts();
 if ('speechSynthesis' in window) {
   loadVoices();
   speechSynthesis.onvoiceschanged = loadVoices;  // Chrome and Edge load voices asynchronously
@@ -1215,7 +1270,7 @@ function toggleMic() {
   // Stop Alexa talking so the mic doesn't hear her, and free the wake-word
   // recognizer: Chrome runs only one SpeechRecognition at a time.
   hasInteracted = true;
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  stopSpeaking();
   if (wakeActive && !wakePaused) {
     pauseWakeListener();
     setTimeout(toggleMic, 300);  // stop() is async; give Chrome time to release the mic
@@ -1312,7 +1367,7 @@ function saveSettings() {
   VOICE_NAME = el('s-voice').value;
   localStorage.setItem('pp_url', URL); localStorage.setItem('pp_key', KEY);
   localStorage.setItem('pp_voice', VOICE_NAME);
-  closeSettings(); probe(); refreshPantry(); toast('Settings saved');
+  closeSettings(); probe(); probeTts(); refreshPantry(); toast('Settings saved');
 }
 
 /* ─── Toast ──────────────────────────────────────────── */
@@ -1496,10 +1551,7 @@ function startWakeListener() {
       el('wake-status').textContent = 'Wake word detected!';
 
       // TTS "Yes?" reply, then start command mic
-      const yes = utter('Yes?', bestVoice());
-      yes.onend = () => toggleMic();
-      speechSynthesis.cancel();
-      speechSynthesis.speak(yes);
+      speakThen('Yes?', () => toggleMic());
     }
   };
 

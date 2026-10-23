@@ -116,7 +116,8 @@ Everything in this repo was built during the submission window (first commit 202
 - Offline recipe book for when Bedrock is unavailable; Bedrock status in `/health`
 - Medicine cabinet (6 tools) with pack-style expiry parsing, oldest-batch-first use, and a medical-advice guard
 - `daily_briefing`: one morning-routine answer covering expiring food, medicine alerts, tonight's meal and the shopping list
-- 160 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
+- Optional ElevenLabs voice for the simulator through a server-side `/tts` proxy (key stays on the server, rate limited, falls back to the browser voice)
+- 168 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
 
 **Repo:** https://github.com/abhisuman2001/pantrypilot-alexa-mcp  
 **Live MCP:** https://kykh233phz.us-east-1.awsapprunner.com/mcp
