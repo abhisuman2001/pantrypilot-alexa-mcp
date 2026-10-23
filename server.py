@@ -1121,7 +1121,7 @@ def daily_briefing(ctx: Context | None = None) -> str:
         if meal:
             out.append(f"Tonight's plan is {meal['recipe']}.")
         elif soon:
-            out.append("Ask me what to cook tonight and I'll use those up.")
+            out.append(f"Ask me what to cook tonight and I'll use {'it' if len(soon) == 1 else 'them'} up.")
         if shopping:
             out.append(f"You have {shopping} thing{'s' if shopping > 1 else ''} on your shopping list.")
 
