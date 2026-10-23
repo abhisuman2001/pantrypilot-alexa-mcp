@@ -40,7 +40,7 @@ def _r(name, ingredients, diet, minutes, method, *tags, need=2) -> Recipe:
 
 RECIPES: tuple[Recipe, ...] = (
     _r("a spinach and cheese omelette", ["egg", "spinach", "cheese"], "vegetarian", 10,
-       "Whisk the eggs, wilt the spinach in a hot pan, pour the eggs over, add the cheese and fold.",
+       "Whisk the eggs, wilt the spinach in a hot pan, pour the eggs over, add cheese if you have some, and fold.",
        "breakfast", "quick", "dairy"),
     _r("French toast", ["egg", "bread|toast|brioche", "milk"], "vegetarian", 15,
        "Dip the bread in egg beaten with milk, then fry until golden on both sides.",
@@ -206,12 +206,13 @@ def suggest(rows, prefs: dict, mood: str = "", today: date | None = None) -> str
     if not ranked:
         return None
     _, recipe, used, expiring = ranked[0]
-    why = f" It uses your {_join(used)}."
+    reply = f"How about {recipe.name}? It takes about {recipe.minutes} minutes"
     if expiring:
         plural = len(expiring) > 1 or expiring[0].endswith("s")
-        why += (f" Your {_join(expiring)} expire soon, so this uses them up." if plural
-                else f" Your {expiring[0]} expires soon, so this uses it up.")
-    return f"How about {recipe.name}?{why} {recipe.method} It takes about {recipe.minutes} minutes."
+        reply += f" and uses up your {_join(expiring)} before {'they go' if plural else 'it goes'} bad."
+    else:
+        reply += f" and uses your {_join(used)}."
+    return f"{reply} Here's how: {recipe.method}"
 
 
 def week_plan(rows, prefs: dict, today: date | None = None) -> str | None:
@@ -227,5 +228,5 @@ def week_plan(rows, prefs: dict, today: date | None = None) -> str | None:
         nights.append(f"{day}, {name}.")
     plan = "Here's your week. " + " ".join(nights)
     if len(picks) < 7:
-        plan += " Add a few more groceries and I can fill the rest of the week."
+        plan += " Add a few more groceries and I'll fill in the rest of the week."
     return plan

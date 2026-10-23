@@ -279,6 +279,27 @@ def _when(iso: str) -> str:
     return f"on {d:%B} {d.day}"
 
 
+def _until(iso: str) -> str:
+    """'tomorrow', 'Sunday', 'November 12' for 'good until ...'."""
+    w = _when(iso)
+    return w[3:] if w.startswith("on ") else w
+
+
+def _join(items) -> str:
+    """'a', 'a and b', 'a, b and c' — how people list things out loud."""
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _thing(qty: float, unit: str | None, name: str) -> str:
+    """Like _amount, but a single plain item is just its name: 'milk', '2 kg of rice'."""
+    if qty == 1 and (not unit or unit in ("pcs", "pc", "piece", "pieces")):
+        return name
+    return _amount(qty, unit, name)
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -315,8 +336,12 @@ def add_item(
             removed = con.execute(
                 "DELETE FROM shopping_list WHERE owner=? AND name=?", (owner, name)
             ).rowcount
-        suffix = " Removed from your shopping list." if removed else ""
-        return f"Added {_amount(quantity, unit, name)}.{suffix}"
+        reply = f"Got it, I've added {_thing(quantity, unit, name)}"
+        if exp:
+            reply += f", good until {_until(exp)}"
+        if removed:
+            reply += ". I've crossed it off your shopping list too"
+        return reply + "."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -343,7 +368,7 @@ def use_item(
                 "SELECT qty, unit FROM items WHERE owner=? AND name=?", (owner, name)
             ).fetchone()
             if not row:
-                return f"You don't have any {name}."
+                return f"Hmm, I don't see any {name} in your pantry."
             left = row["qty"] - quantity
             if left <= 0:
                 unit = row["unit"]
@@ -358,13 +383,13 @@ def use_item(
                     "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
                     (owner, name, used_qty, unit, date.today().isoformat()),
                 )
-                return f"That was the last of your {name}. I've added it to your shopping list."
+                return f"That was the last of your {name}, so I've added it to your shopping list."
             con.execute("UPDATE items SET qty=? WHERE owner=? AND name=?", (left, owner, name))
             con.execute(
                 "INSERT INTO waste_log(owner, name, qty, unit, logged_at) VALUES(?,?,?,?,?)",
                 (owner, name, quantity, row["unit"], date.today().isoformat()),
             )
-        return f"{_amount(left, row['unit'], name)} left."
+        return f"Okay, you've got {_amount(left, row['unit'], name)} left."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -392,7 +417,7 @@ def add_to_shopping_list(
                    ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
                 (owner, name, quantity, unit),
             )
-        return f"Added {_amount(quantity, unit, name)} to your shopping list."
+        return f"Okay, I've put {_thing(quantity, unit, name)} on your shopping list."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -411,9 +436,9 @@ def get_shopping_list(ctx: Context | None = None) -> str:
             "SELECT name, qty, unit FROM shopping_list WHERE owner=? ORDER BY name", (owner,)
         ).fetchall()
         if not rows:
-            return "Your shopping list is empty."
-        return "Shopping list: " + ", ".join(
-            _amount(r['qty'], r['unit'], r['name']) for r in rows
+            return "Your shopping list is empty right now."
+        return "On your shopping list: " + _join(
+            _thing(r['qty'], r['unit'], r['name']) for r in rows
         ) + "."
     except Exception:
         log.exception("get_shopping_list failed")
@@ -431,9 +456,9 @@ def list_pantry(ctx: Context | None = None) -> str:
             "SELECT * FROM items WHERE owner=? ORDER BY name", (owner,)
         ).fetchall()
         if not rows:
-            return "Your pantry is empty."
-        return "You have " + ", ".join(
-            _amount(r['qty'], r['unit'], r['name']) for r in rows
+            return "Your pantry is empty right now."
+        return "You've got " + _join(
+            _thing(r['qty'], r['unit'], r['name']) for r in rows
         ) + "."
     except Exception:
         log.exception("list_pantry failed")
@@ -462,10 +487,19 @@ def expiring_soon(days: int = 3, ctx: Context | None = None) -> str:
         med_note = (f" Also, {expired_meds} medicine{'s' if expired_meds > 1 else ''} in your cabinet "
                     f"{'have' if expired_meds > 1 else 'has'} expired.") if expired_meds else ""
         if not rows:
-            return f"Nothing expires in the next {days} days.{med_note}"
-        return "Use soon: " + ", ".join(
-            f"{r['name']} {_when(r['expires'])}" for r in rows
-        ) + "." + med_note
+            return f"Good news, nothing expires in the next {days} days.{med_note}"
+        today = date.today()
+        gone = [r["name"] for r in rows if date.fromisoformat(r["expires"]) < today]
+        soon = [r for r in rows if date.fromisoformat(r["expires"]) >= today]
+        out = []
+        if gone:
+            out.append(f"Your {_join(gone)} {'has' if len(gone) == 1 else 'have'} already expired.")
+        if soon:
+            first, rest = soon[0], soon[1:]
+            phrases = [f"{first['name']} expires {_when(first['expires'])}"]
+            phrases += [f"{r['name']} {_when(r['expires'])}" for r in rest]
+            out.append(f"Heads up: {_join(phrases)}.")
+        return " ".join(out) + med_note
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -492,7 +526,7 @@ def suggest_recipe(mood: str = "", ctx: Context | None = None) -> str:
             (owner,),
         ).fetchall()
         if not rows:
-            return "Your pantry is empty, so add some groceries first."
+            return "Your pantry is empty right now. Add a few groceries and I'll find you something to cook."
         stock = "; ".join(
             f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})"
             for r in rows
@@ -531,7 +565,7 @@ def weekly_meal_plan(ctx: Context | None = None) -> str:
             (owner,),
         ).fetchall()
         if not rows:
-            return "Your pantry is empty. Add some groceries and I'll plan your week."
+            return "Your pantry is empty right now. Add a few groceries and I'll plan your week."
         stock = "; ".join(f"{r['qty']:g} {r['unit']} {r['name']} (exp {r['expires'] or 'n/a'})" for r in rows)
         prefs = get_preferences(owner)
         pref_clause = format_preferences(prefs)
@@ -569,9 +603,9 @@ def waste_report(days: int = 7, ctx: Context | None = None) -> str:
             (owner, since),
         ).fetchall()
         if not rows:
-            return f"No items recorded as used in the last {days} days."
-        parts = ", ".join(_amount(r['total'], r['unit'], r['name']) for r in rows)
-        return f"In the last {days} days you used: {parts}."
+            return f"You haven't used anything up in the last {days} days."
+        parts = _join(_amount(r['total'], r['unit'], r['name']) for r in rows)
+        return f"In the last {days} days you used {parts}."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -613,14 +647,14 @@ def set_preferences(
             )
         parts = []
         if diet:
-            parts.append(f"diet set to {diet}")
+            parts.append(f"I'll keep your recipes {diet}")
         if allergies:
-            parts.append(f"allergies noted: {allergies}")
+            parts.append(f"I'll steer clear of {allergies}")
         if dislikes:
-            parts.append(f"dislikes noted: {dislikes}")
+            parts.append(f"I'll leave out {dislikes}")
         if not parts:
-            return "No preferences provided. Say your diet, allergies, or dislikes."
-        return "Got it. " + "; ".join(parts) + ". I'll use this when suggesting recipes."
+            return "Tell me your diet, allergies, or anything you don't like, and I'll remember it."
+        return "Got it, " + _join(parts) + "."
     except Exception:
         log.exception("set_preferences failed")
         return "Could not save your preferences. Please try again."
@@ -635,15 +669,15 @@ def get_preferences_tool(ctx: Context | None = None) -> str:
         owner = get_owner(ctx)
         prefs = get_preferences(owner)
         if not prefs or not any(prefs.values()):
-            return "No preferences saved yet. Tell me your diet, dislikes, or allergies."
+            return "You haven't told me any preferences yet. Just say something like, I'm vegetarian."
         parts = []
         if prefs.get("diet"):
-            parts.append(f"diet: {prefs['diet']}")
+            parts.append(f"you're {prefs['diet']}")
         if prefs.get("allergies"):
-            parts.append(f"allergies: {prefs['allergies']}")
+            parts.append(f"you're allergic to {prefs['allergies']}")
         if prefs.get("dislikes"):
-            parts.append(f"dislikes: {prefs['dislikes']}")
-        return "Your preferences: " + "; ".join(parts) + "."
+            parts.append(f"you don't like {prefs['dislikes']}")
+        return "Here's what I know: " + _join(parts) + "."
     except Exception:
         log.exception("get_preferences_tool failed")
         return "Could not read your preferences. Please try again."
@@ -679,7 +713,7 @@ def schedule_meal(
                 (owner, resolved, recipe, "planned"),
             )
         friendly = _friendly_date(resolved)
-        return f"Scheduled {recipe} for {friendly}."
+        return f"Done, {recipe} is on the menu for {friendly}."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -704,9 +738,9 @@ def get_meal_schedule(days: int = 7, ctx: Context | None = None) -> str:
             (owner, start, end),
         ).fetchall()
         if not rows:
-            return f"No meals scheduled in the next {days} days."
-        parts = [f"{r['meal_date']}: {r['recipe']} ({r['status']})" for r in rows]
-        return "Upcoming meals: " + "; ".join(parts) + "."
+            return f"Nothing's planned for the next {days} days yet."
+        parts = [f"{r['recipe']} on {_friendly_date(r['meal_date'])}" for r in rows]
+        return "Coming up: " + _join(parts) + "."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -761,7 +795,7 @@ def _friendly_date(iso: str) -> str:
     try:
         d = date.fromisoformat(iso)
         # %-d (no-pad day) is Linux-only; use lstrip('0') for portability
-        return d.strftime("%A %b ") + str(d.day)
+        return d.strftime("%A, %B ") + str(d.day)
     except Exception:
         return iso
 
@@ -833,11 +867,11 @@ def add_medicine(
                 )
         what = medicine_cabinet.describe(quantity, form, name, strength)
         if not exp:
-            return f"Added {what}. I don't have an expiry date for it, so tell me when you check the pack."
+            return f"Got it, I've added {what}. When you check the pack, tell me the expiry date and I'll keep an eye on it."
         if _is_expired(exp):
-            return (f"Added {what}, but it already expired on {medicine_cabinet.spoken_date(exp)}. "
+            return (f"I've added {what}, but heads up: it expired on {medicine_cabinet.spoken_date(exp)}. "
                     + medicine_cabinet.DISPOSAL_GUIDANCE)
-        return f"Added {what}. It expires {medicine_cabinet.spoken_date(exp)}."
+        return f"Got it, I've added {what}, good until {medicine_cabinet.spoken_date(exp)}."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -862,12 +896,12 @@ def list_medicines(ctx: Context | None = None) -> str:
         parts = []
         for r in rows[:10]:
             what = medicine_cabinet.describe(r["qty"], r["form"], r["name"], r["strength"])
-            when = ("expired" if _is_expired(r["expires"])
-                    else f"expires {medicine_cabinet.spoken_date(r['expires'])}" if r["expires"]
-                    else "no expiry date")
+            when = ("which has expired" if _is_expired(r["expires"])
+                    else f"good until {medicine_cabinet.spoken_date(r['expires'])}" if r["expires"]
+                    else "with no expiry date")
             parts.append(f"{what}, {when}")
         more = f" And {len(rows) - 10} more." if len(rows) > 10 else ""
-        return "In your medicine cabinet: " + "; ".join(parts) + "." + more
+        return "In your medicine cabinet you've got " + "; ".join(parts) + "." + more
     except Exception:
         log.exception("list_medicines failed")
         return "Could not read the medicine cabinet. Please try again."
@@ -889,16 +923,17 @@ def medicines_expiring(days: int = 30, ctx: Context | None = None) -> str:
             (owner, cutoff),
         ).fetchall()
         if not rows:
-            return f"No medicines expire in the next {days} days."
+            return f"Good news, no medicines expire in the next {days} days."
         label = lambda r: f"{r['name']} {r['strength']}".strip()
         expired = [label(r) for r in rows if _is_expired(r["expires"])]
         soon = [f"{label(r)} on {medicine_cabinet.spoken_date(r['expires'])}"
                 for r in rows if not _is_expired(r["expires"])]
         out = []
         if expired:
-            out.append(f"Expired: {', '.join(expired)}. {medicine_cabinet.DISPOSAL_GUIDANCE}")
+            verb = "has" if len(expired) == 1 else "have"
+            out.append(f"Your {_join(expired)} {verb} expired. {medicine_cabinet.DISPOSAL_GUIDANCE}")
         if soon:
-            out.append(f"Expiring in the next {days} days: {', '.join(soon)}.")
+            out.append(f"Coming up in the next {days} days: {_join(soon)}.")
         return " ".join(out)
     except ValueError as exc:
         return str(exc)
@@ -932,17 +967,17 @@ def find_medicine(query: str, ctx: Context | None = None) -> str:
             if rows:
                 break
         if not rows:
-            return f"I couldn't find {q} in your medicine cabinet."
+            return f"I couldn't find any {q} in your medicine cabinet."
         parts = []
         for r in rows[:5]:
             what = medicine_cabinet.describe(r["qty"], r["form"], r["name"], r["strength"])
             if _is_expired(r["expires"]):
                 parts.append(f"{what}, but it expired on {medicine_cabinet.spoken_date(r['expires'])}")
             elif r["expires"]:
-                parts.append(f"{what}, expiring {medicine_cabinet.spoken_date(r['expires'])}")
+                parts.append(f"{what}, good until {medicine_cabinet.spoken_date(r['expires'])}")
             else:
                 parts.append(what)
-        return "You have " + "; ".join(parts) + "."
+        return "Yes, you've got " + "; ".join(parts) + "."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -966,10 +1001,10 @@ def use_medicine(name: str, quantity: float = 1, ctx: Context | None = None) -> 
                 (owner, name),
             ).fetchall()
             if not rows:
-                return f"You don't have any {name} in your medicine cabinet."
+                return f"Hmm, I don't see any {name} in your medicine cabinet."
             usable = [r for r in rows if not _is_expired(r["expires"])]
             if not usable:
-                return (f"Your {name} expired on {medicine_cabinet.spoken_date(rows[-1]['expires'])}. "
+                return (f"Careful, your {name} expired on {medicine_cabinet.spoken_date(rows[-1]['expires'])}. "
                         + medicine_cabinet.DISPOSAL_GUIDANCE)
             remaining = quantity
             for r in usable:
@@ -989,8 +1024,8 @@ def use_medicine(name: str, quantity: float = 1, ctx: Context | None = None) -> 
                        ON CONFLICT(owner, name) DO UPDATE SET qty=excluded.qty, unit=excluded.unit""",
                     (owner, name, 1, form),
                 )
-                return f"That was the last of your {name}. I've added it to your shopping list."
-        return f"{medicine_cabinet.describe(left, usable[0]['form'], name, '')} left."
+                return f"That was the last of your {name}, so I've added it to your shopping list."
+        return f"Okay, you've got {medicine_cabinet.describe(left, usable[0]['form'], name, '')} left."
     except ValueError as exc:
         return str(exc)
     except Exception:
@@ -1017,8 +1052,8 @@ def remove_expired_medicines(ctx: Context | None = None) -> str:
                 "DELETE FROM medicines WHERE owner=? AND expires IS NOT NULL AND expires<?",
                 (owner, today),
             )
-        names = ", ".join(f"{r['name']} {r['strength']}".strip() for r in rows)
-        return f"Removed {names} from your cabinet. {medicine_cabinet.DISPOSAL_GUIDANCE}"
+        names = _join(f"{r['name']} {r['strength']}".strip() for r in rows)
+        return f"Done, I've taken {names} out of your cabinet. {medicine_cabinet.HOW_TO_DISPOSE}"
     except Exception:
         log.exception("remove_expired_medicines failed")
         return "Could not update the medicine cabinet. Please try again."

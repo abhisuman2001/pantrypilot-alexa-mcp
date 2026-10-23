@@ -22,12 +22,12 @@ class TestSuggest:
         result = orc.suggest(rows, {}, today=TODAY)
         assert "omelette" in result
         assert "spinach" in result and "eggs" in result
-        assert "expire soon, so this uses them up" in result
+        assert "uses up your eggs and spinach before they go bad" in result
 
     def test_expiry_note_only_names_items_it_uses(self):
         rows = pantry(("bread", 2), ("cheese", 9), ("lentils", None))
         result = orc.suggest(rows, {}, today=TODAY)
-        assert "Your bread expires soon, so this uses it up." in result
+        assert "uses up your bread before it goes bad." in result
         assert "lentil" not in result
 
     def test_vegetarian_never_gets_meat(self):

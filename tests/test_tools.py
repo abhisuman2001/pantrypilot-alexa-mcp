@@ -405,7 +405,7 @@ class TestWeeklyMealPlan:
 class TestWasteReport:
     def test_empty_report(self):
         result = s().waste_report(days=7)
-        assert "no items" in result.lower() or "0" in result or "no" in result.lower()
+        assert "haven't used anything" in result.lower()
 
     def test_use_item_populates_waste_log(self):
         srv = s()
@@ -668,7 +668,7 @@ class TestScheduleMeal:
 
     def test_get_meal_schedule_empty(self):
         result = s().get_meal_schedule()
-        assert "no meals" in result.lower()
+        assert "nothing's planned" in result.lower()
 
     def test_get_meal_schedule_shows_scheduled_meal(self):
         srv = s()

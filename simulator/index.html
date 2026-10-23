@@ -450,14 +450,14 @@
       display: block; font-size: .74rem; color: var(--text-dim);
       margin-bottom: 5px; font-weight: 500;
     }
-    .fld input {
+    .fld input, .fld select {
       width: 100%; background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       color: var(--text); font-family: inherit; font-size: .84rem;
       padding: 9px 13px; outline: none; transition: border-color .2s;
     }
-    .fld input:focus { border-color: var(--cyan); }
+    .fld input:focus, .fld select:focus { border-color: var(--cyan); }
     .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
     .btn-ghost {
       background: transparent;
@@ -652,6 +652,14 @@
     <div class="fld">
       <label>API Key (MCP_API_KEY) — leave blank if not set</label>
       <input id="s-key" type="password" placeholder="optional" />
+    </div>
+    <div class="fld">
+      <label>Alexa's voice</label>
+      <select id="s-voice"><option value="">Automatic (most natural available)</option></select>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+        <button class="btn-ghost" type="button" onclick="testVoice()">Test voice</button>
+        <span id="voice-hint" style="font-size:.72rem; color:var(--text-dim);"></span>
+      </div>
     </div>
     <div class="info-box">
       Start the server with:<br/>
@@ -1051,13 +1059,83 @@ function alexaSay(txt) {
 /* ─── Spoken replies ─────────────────────────────────── */
 /* Browsers block speech until the user interacts, so the greeting stays silent */
 let hasInteracted = false;
+let VOICE_NAME = localStorage.getItem('pp_voice') || '';
+let voices = [];
+
+/* Most natural first: Edge's neural "Natural" voices, then Google's, then Apple's */
+const VOICE_PREFS = [/\bNatural\b/i, /Google US English/i, /Google UK English Female/i,
+                     /\b(?:Samantha|Ava|Allison|Serena)\b/i, /\b(?:Aria|Jenny|Zira)\b/i];
+
+function isNatural(v) { return /\bNatural\b|Google/i.test(v.name); }
+
+function loadVoices() {
+  voices = speechSynthesis.getVoices().filter(v => /^en([-_]|$)/i.test(v.lang));
+  fillVoiceSelect();
+}
+
+function bestVoice() {
+  if (VOICE_NAME) { const v = voices.find(v => v.name === VOICE_NAME); if (v) return v; }
+  for (const re of VOICE_PREFS) {
+    const v = voices.find(v => re.test(v.name) && /en-US/i.test(v.lang)) || voices.find(v => re.test(v.name));
+    if (v) return v;
+  }
+  return voices.find(v => /en-US/i.test(v.lang)) || voices[0] || null;
+}
+
+/* Say units the way people do: "500 mg" → "500 milligrams", "6 pcs of eggs" → "6 eggs" */
+function speechText(txt) {
+  return txt
+    .replace(/\b(\d+(?:\.\d+)?) pcs (?:of )?/g, '$1 ')
+    .replace(/(\d)\s?mg\b/g, '$1 milligrams')
+    .replace(/(\d)\s?mcg\b/g, '$1 micrograms')
+    .replace(/(\d)\s?ml\b/g, '$1 millilitres')
+    .replace(/(\d)\s?kg\b/g, '$1 kilos')
+    .replace(/(\d)\s?g\b/g, '$1 grams');
+}
+
+function utter(text, voice) {
+  const u = new SpeechSynthesisUtterance(text);
+  if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = 'en-US'; }
+  u.rate = voice && isNatural(voice) ? 1.0 : 0.95;  // older voices sound less robotic a touch slower
+  u.pitch = 1.0;
+  return u;
+}
+
 function speak(txt) {
   if (!hasInteracted || !('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
-  // "6 pcs of eggs" → "6 eggs" so the voice doesn't spell out "p c s"
-  const u = new SpeechSynthesisUtterance(txt.replace(/\b(\d+(?:\.\d+)?) pcs (?:of )?/g, '$1 '));
-  u.lang = 'en-US';
-  speechSynthesis.speak(u);
+  const voice = bestVoice();
+  // One utterance per sentence: natural pauses between sentences, and Chrome's
+  // Google voices stop mid-sentence on a single utterance longer than ~15 s.
+  const sentences = speechText(txt).match(/[^.!?]+[.!?]*/g) || [txt];
+  sentences.forEach(s => s.trim() && speechSynthesis.speak(utter(s.trim(), voice)));
+}
+
+function fillVoiceSelect() {
+  const sel = document.getElementById('s-voice');
+  if (!sel) return;
+  const sorted = [...voices].sort((a, b) => isNatural(b) - isNatural(a) || a.name.localeCompare(b.name));
+  const best = bestVoice();
+  sel.innerHTML = '<option value="">Automatic (most natural available)</option>' + sorted.map(v =>
+    `<option value="${esc(v.name)}">${esc(v.name)}${isNatural(v) ? ' ★ natural' : ''}</option>`).join('');
+  sel.value = VOICE_NAME;
+  const hint = document.getElementById('voice-hint');
+  if (hint) hint.textContent = best
+    ? (isNatural(best) ? `Using ${best.name}.` : `Using ${best.name}. For a more natural voice, open this page in Microsoft Edge.`)
+    : 'No speech voices found in this browser.';
+}
+
+function testVoice() {
+  hasInteracted = true;
+  const name = el('s-voice').value;
+  const prev = VOICE_NAME; VOICE_NAME = name;
+  speak("Hi, I'm PantryPilot. Your spinach expires tomorrow, so how about an omelette tonight?");
+  VOICE_NAME = prev;
+}
+
+if ('speechSynthesis' in window) {
+  loadVoices();
+  speechSynthesis.onvoiceschanged = loadVoices;  // Chrome and Edge load voices asynchronously
 }
 
 function typing() {
@@ -1219,13 +1297,16 @@ function toggleMic() {
 /* ─── Settings ───────────────────────────────────────── */
 function openSettings() {
   el('s-url').value = URL; el('s-key').value = KEY;
+  fillVoiceSelect();
   el('settings-overlay').classList.add('open');
 }
 function closeSettings() { el('settings-overlay').classList.remove('open'); }
 function saveSettings() {
   URL = el('s-url').value.trim() || DEFAULT_URL;
   KEY = el('s-key').value.trim();
+  VOICE_NAME = el('s-voice').value;
   localStorage.setItem('pp_url', URL); localStorage.setItem('pp_key', KEY);
+  localStorage.setItem('pp_voice', VOICE_NAME);
   closeSettings(); probe(); refreshPantry(); toast('Settings saved');
 }
 
@@ -1410,12 +1491,10 @@ function startWakeListener() {
       el('wake-status').textContent = 'Wake word detected!';
 
       // TTS "Yes?" reply, then start command mic
-      const utter = new SpeechSynthesisUtterance('Yes?');
-      utter.rate   = 1.1;
-      utter.volume = 0.8;
-      utter.onend  = () => toggleMic();
+      const yes = utter('Yes?', bestVoice());
+      yes.onend = () => toggleMic();
       speechSynthesis.cancel();
-      speechSynthesis.speak(utter);
+      speechSynthesis.speak(yes);
     }
   };
 

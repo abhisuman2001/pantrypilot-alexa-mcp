@@ -13,14 +13,15 @@ import re
 from datetime import date
 
 NO_ADVICE = (
-    "I can only keep track of your medicines and their expiry dates. "
-    "For dosing or whether a medicine is right for you, check the label or ask a pharmacist or doctor."
+    "I'm sorry, I can't give medical advice. I can keep track of your medicines and when they expire, "
+    "but for dosing or whether a medicine is right for you, please check the label or ask a pharmacist or doctor."
 )
 
-DISPOSAL_GUIDANCE = (
-    "Please don't use expired medicine. The safest way to get rid of it is a pharmacy "
-    "take-back point. Don't flush it unless the label says to."
+HOW_TO_DISPOSE = (
+    "The safest way to get rid of expired medicine is a pharmacy take-back point, "
+    "and don't flush it unless the label says to."
 )
+DISPOSAL_GUIDANCE = "Please don't use it. " + HOW_TO_DISPOSE
 
 # Words that describe packaging, not the medicine, when searching the cabinet.
 FILLER_WORDS = frozenset({

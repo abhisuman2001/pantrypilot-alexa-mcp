@@ -67,7 +67,7 @@ class TestAdviceGuard:
 class TestAddMedicine:
     def test_add_with_pack_style_expiry(self):
         out = s().add_medicine("Paracetamol", quantity=1, form="bottle", strength="500 mg", expiry="March 2027")
-        assert out.startswith("Added 1 bottle of paracetamol 500 mg. It expires March 31, 2027")
+        assert out == "Got it, I've added 1 bottle of paracetamol 500 mg, good until March 31, 2027."
 
     def test_same_batch_merges_quantity(self):
         s().add_medicine("ibuprofen", quantity=1, strength="200 mg", expiry="2027-01")
@@ -81,10 +81,10 @@ class TestAddMedicine:
 
     def test_already_expired_warns(self):
         out = s().add_medicine("cough syrup", form="bottle", expiry="2025-01")
-        assert "already expired on January 31, 2025" in out and "take-back" in out
+        assert "heads up: it expired on January 31, 2025" in out and "take-back" in out
 
     def test_no_expiry_asks_to_check_pack(self):
-        assert "tell me when you check the pack" in s().add_medicine("plasters")
+        assert "tell me the expiry date" in s().add_medicine("plasters")
 
     def test_bad_input(self):
         assert "greater than zero" in s().add_medicine("x", quantity=0)
@@ -98,19 +98,19 @@ class TestExpiringAndRemove:
         s().add_medicine("old syrup", form="bottle", expiry="2025-05")
         s().add_medicine("vitamin d", expiry="2028-01")
         out = s().medicines_expiring()
-        assert out.startswith("Expired: old syrup.")
-        assert "Expiring in the next 30 days: cetirizine on" in out
+        assert out.startswith("Your old syrup has expired.")
+        assert "Coming up in the next 30 days: cetirizine on" in out
         assert "vitamin d" not in out
 
     def test_nothing_expiring(self):
         s().add_medicine("vitamin d", expiry="2028-01")
-        assert s().medicines_expiring() == "No medicines expire in the next 30 days."
+        assert s().medicines_expiring() == "Good news, no medicines expire in the next 30 days."
 
     def test_remove_expired(self):
         s().add_medicine("old syrup", form="bottle", expiry="2025-05")
         s().add_medicine("vitamin d", expiry="2028-01")
         out = s().remove_expired_medicines()
-        assert out.startswith("Removed old syrup from your cabinet.") and "take-back" in out
+        assert out.startswith("Done, I've taken old syrup out of your cabinet.") and "take-back" in out
         assert "old syrup" not in s().list_medicines()
         assert "nothing in your medicine cabinet has expired" in s().remove_expired_medicines()
 
@@ -124,7 +124,7 @@ class TestFindAndUse:
         s().add_medicine("cetirizine", strength="10 mg", purpose="allergy", expiry="2027-05")
         assert "cetirizine 10 mg" in s().find_medicine("cetirizine")
         assert "cetirizine" in s().find_medicine("allergy tablets")
-        assert "couldn't find aspirin" in s().find_medicine("aspirin")
+        assert "couldn't find any aspirin" in s().find_medicine("aspirin")
 
     def test_find_warns_when_expired(self):
         s().add_medicine("old syrup", expiry="2025-05")
@@ -138,7 +138,7 @@ class TestFindAndUse:
     def test_use_takes_oldest_unexpired_batch_first(self):
         s().add_medicine("ibuprofen", quantity=1, expiry="2027-01")
         s().add_medicine("ibuprofen", quantity=1, expiry="2027-09")
-        assert s().use_medicine("ibuprofen") == "1 pack of ibuprofen left."
+        assert s().use_medicine("ibuprofen") == "Okay, you've got 1 pack of ibuprofen left."
         assert "September 30, 2027" in s().list_medicines()
         assert "January" not in s().list_medicines()
 
@@ -169,16 +169,16 @@ class TestFindAndUse:
 
 class TestSpeakableReplies:
     def test_plain_counts_never_say_pcs(self):
-        assert s().add_item("eggs", quantity=6) == "Added 6 eggs."
-        assert s().add_item("rice", quantity=2, unit="kg") == "Added 2 kg of rice."
-        assert s().list_pantry() == "You have 6 eggs, 2 kg of rice."
-        assert s().use_item("eggs", quantity=2) == "4 eggs left."
+        assert s().add_item("eggs", quantity=6) == "Got it, I've added 6 eggs."
+        assert s().add_item("rice", quantity=2, unit="kg") == "Got it, I've added 2 kg of rice."
+        assert s().list_pantry() == "You've got 6 eggs and 2 kg of rice."
+        assert s().use_item("eggs", quantity=2) == "Okay, you've got 4 eggs left."
 
     def test_expiring_soon_uses_spoken_dates(self):
         s().add_item("spinach", days_until_expiry=1)
         s().add_item("milk", days_until_expiry=3)
         out = s().expiring_soon()
-        assert out.startswith("Use soon: spinach tomorrow, milk on ")
+        assert out.startswith("Heads up: spinach expires tomorrow and milk on ")
         assert "-" not in out  # no ISO dates
 
     def test_recipe_mood_with_medical_question_is_refused(self):
