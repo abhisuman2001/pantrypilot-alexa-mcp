@@ -11,7 +11,8 @@
 
 **PantryPilot** is a self-hosted MCP server that gives Alexa+ a persistent household pantry and recipe suggestions that use expiring food first — all by voice. Recipes come from Amazon Bedrock, with a built-in recipe book as fallback.
 
-> "Alexa, add six eggs that expire in ten days."  
+> "Alexa, good morning."  
+> "Add six eggs that expire in ten days."  
 > "What's expiring soon?"  
 > "What can I cook tonight?"  
 > "Plan my dinners for the week."  
@@ -35,7 +36,7 @@ PantryPilot fights food waste by always recommending recipes that use the soones
 | Auth | Optional bearer token (`MCP_API_KEY` env var) |
 | Demo UI | `simulator/index.html` — Alexa-style voice chat, served by the server at `/` |
 
-### The 19 tools
+### The 20 tools
 
 | Tool | What Alexa says | Uses Bedrock? |
 |---|---|---|
@@ -58,6 +59,7 @@ PantryPilot fights food waste by always recommending recipes that use the soones
 | `find_medicine` | "Do we have any allergy tablets?" | No |
 | `use_medicine` | "I used the last of the cough syrup" | No |
 | `remove_expired_medicines` | "Remove expired medicines" | No |
+| `daily_briefing` | "Good morning" / "What do I need to know today?" | No |
 
 ### Medicine cabinet: inventory only, never medical advice
 
@@ -113,7 +115,8 @@ Everything in this repo was built during the submission window (first commit 202
 - Dietary preferences and meal scheduling, preference-aware Bedrock prompts (Step 9)
 - Offline recipe book for when Bedrock is unavailable; Bedrock status in `/health`
 - Medicine cabinet (6 tools) with pack-style expiry parsing, oldest-batch-first use, and a medical-advice guard
-- 154 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
+- `daily_briefing`: one morning-routine answer covering expiring food, medicine alerts, tonight's meal and the shopping list
+- 160 pytest tests, plus `scripts/live_smoke.py` to verify the live endpoint and report Bedrock status
 
 **Repo:** https://github.com/abhisuman2001/pantrypilot-alexa-mcp  
 **Live MCP:** https://kykh233phz.us-east-1.awsapprunner.com/mcp

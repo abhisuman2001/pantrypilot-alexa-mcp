@@ -1060,6 +1060,80 @@ def remove_expired_medicines(ctx: Context | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Daily briefing (for an Alexa+ morning routine)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def daily_briefing(ctx: Context | None = None) -> str:
+    """Short daily update for a morning routine, e.g. 'Alexa, good morning' or 'what do I need to know today?'.
+
+    Covers food that has expired or expires today or tomorrow, medicines that have expired or
+    expire this week, tonight's planned meal, and the shopping list.
+    """
+    if err := check_auth(ctx):
+        return err
+    try:
+        owner = get_owner(ctx)
+        today = date.today()
+        con = db()
+        food = con.execute(
+            """SELECT name, expires FROM items WHERE owner=? AND expires IS NOT NULL AND expires<=?
+               ORDER BY expires""",
+            (owner, (today + timedelta(days=1)).isoformat()),
+        ).fetchall()
+        meds = con.execute(
+            """SELECT name, strength, expires FROM medicines WHERE owner=? AND expires IS NOT NULL
+               AND expires<=? ORDER BY expires""",
+            (owner, (today + timedelta(days=7)).isoformat()),
+        ).fetchall()
+        meal = con.execute(
+            "SELECT recipe FROM meal_schedule WHERE owner=? AND meal_date=? ORDER BY id LIMIT 1",
+            (owner, today.isoformat()),
+        ).fetchone()
+        shopping = con.execute(
+            "SELECT COUNT(*) FROM shopping_list WHERE owner=?", (owner,)
+        ).fetchone()[0]
+
+        out = []
+        gone = [r["name"] for r in food if date.fromisoformat(r["expires"]) < today]
+        soon = [r for r in food if date.fromisoformat(r["expires"]) >= today]
+        if gone:
+            out.append(f"Your {_join(gone)} {'has' if len(gone) == 1 else 'have'} already expired.")
+        if soon:
+            phrases = [f"{soon[0]['name']} expires {_when(soon[0]['expires'])}"]
+            phrases += [f"{r['name']} {_when(r['expires'])}" for r in soon[1:]]
+            sentence = _join(phrases)
+            out.append(f"{sentence[0].upper()}{sentence[1:]}, so use "
+                       f"{'it' if len(soon) == 1 else 'them'} first.")
+
+        label = lambda r: f"{r['name']} {r['strength']}".strip()
+        meds_gone = [label(r) for r in meds if _is_expired(r["expires"])]
+        upcoming = [r for r in meds if not _is_expired(r["expires"])]
+        meds_soon = ([f"{label(upcoming[0])} expires {_when(upcoming[0]['expires'])}"]
+                     + [f"{label(r)} {_when(r['expires'])}" for r in upcoming[1:]]) if upcoming else []
+        if meds_gone:
+            out.append(f"In your medicine cabinet, {_join(meds_gone)} "
+                       f"{'has' if len(meds_gone) == 1 else 'have'} expired, so please set "
+                       f"{'it' if len(meds_gone) == 1 else 'them'} aside to dispose of safely.")
+        if meds_soon:
+            out.append(f"Your {_join(meds_soon)}.")
+
+        if meal:
+            out.append(f"Tonight's plan is {meal['recipe']}.")
+        elif soon:
+            out.append("Ask me what to cook tonight and I'll use those up.")
+        if shopping:
+            out.append(f"You have {shopping} thing{'s' if shopping > 1 else ''} on your shopping list.")
+
+        if not (gone or soon or meds_gone or meds_soon):
+            out.insert(0, "Good news, nothing in your pantry or medicine cabinet needs attention today.")
+        return " ".join(out)
+    except Exception:
+        log.exception("daily_briefing failed")
+        return "I couldn't put your briefing together right now. Please try again."
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

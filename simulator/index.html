@@ -552,6 +552,7 @@
     <div class="conv-bottom">
       <!-- Quick-action pills -->
       <div class="pills">
+        <button class="pill" onclick="qa('daily_briefing')"><i data-lucide="sunrise"></i>Good morning</button>
         <button class="pill" onclick="qa('suggest_recipe')"><i data-lucide="sparkles"></i>Meal ideas</button>
         <button class="pill" onclick="qa('expiring_soon')"><i data-lucide="clock"></i>Expiring soon</button>
         <button class="pill" onclick="tf('add')"><i data-lucide="plus"></i>Add an item</button>
@@ -762,7 +763,7 @@ const LABELS = {
   list_pantry:'List pantry', expiring_soon:"What's expiring soon?",
   suggest_recipe:'Suggest a recipe', get_shopping_list:'Show shopping list',
   weekly_meal_plan:'Plan my week', waste_report:'Show waste report (7 days)',
-  list_medicines:"What's in my medicine cabinet?", medicines_expiring:'Which medicines are expiring?'
+  daily_briefing:'Good morning!', list_medicines:"What's in my medicine cabinet?", medicines_expiring:'Which medicines are expiring?'
 };
 
 async function qa(tool) {
@@ -948,6 +949,10 @@ function parseMedicine(t, days) {
 function parse(raw) {
   const t = normalize(raw);
   const days = windowDays(t);
+
+  // Morning routine: "good morning", "brief me", "what do I need to know today"
+  if (/^(?:(?:hey\s+)?(?:alexa|pilot|pantry pilot)\s+)?(?:good\s+)?morning(?:\s+(?:alexa|pilot))?$|\b(?:daily|morning) briefing\b|\bbrief me\b|\bwhat do i need to know\b|\bwhat'?s my (?:update|briefing)\b/.test(t))
+    return { tool:'daily_briefing', args:{} };
 
   // Dietary preferences
   if (/\bwhat are my\b.*\bpreferences\b|\bmy (?:dietary )?preferences\b/.test(t))
